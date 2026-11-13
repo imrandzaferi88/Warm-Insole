@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
     private val batteryPollRunnable = object : Runnable {
         override fun run() {
             gatt1?.let { queryBattery(it) }
-            handler.postDelayed({ gatt2?.let { queryBattery(it) } }, 250)
+            handler.postDelayed({ gatt2?.let { queryBattery(it) } }, 600)
             handler.postDelayed(this, 15000)
         }
     }
@@ -65,7 +65,7 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor = Color.parseColor("#0F1115")
         checkPermissions()
         setupUI()
-        handler.postDelayed(batteryPollRunnable, 5000)
+        handler.postDelayed(batteryPollRunnable, 4000)
     }
 
     override fun onDestroy() {
@@ -190,25 +190,14 @@ class MainActivity : AppCompatActivity() {
         val btnConnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        btnConnectAuto = MaterialButton(this).apply {
-            text = "COLLEGA ENTRAMBE"
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            cornerRadius = 26
-            backgroundTintList = ColorStateList.valueOf(Color.parseColor("#1976D2"))
-            setTextColor(Color.WHITE)
+        btnConnectAuto = styleCompactButton("COLLEGA ENTRAMBE", "#1976D2", Color.WHITE, 14f, true).apply {
             setOnClickListener { autoConnectBoth() }
         }
-        btnDisconnectAll = MaterialButton(this).apply {
-            text = "SCOLLEGA"
-            textSize = 13f
-            cornerRadius = 26
-            backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
-            setTextColor(Color.parseColor("#B0B8C4"))
+        btnDisconnectAll = styleCompactButton("SCOLLEGA", "#252A34", Color.parseColor("#B0B8C4"), 13f, false).apply {
             setOnClickListener { disconnectAll() }
         }
-        btnConnRow.addView(btnConnectAuto, LinearLayout.LayoutParams(0, 140, 1.6f).apply { rightMargin = 12 })
-        btnConnRow.addView(btnDisconnectAll, LinearLayout.LayoutParams(0, 140, 1f))
+        btnConnRow.addView(btnConnectAuto, LinearLayout.LayoutParams(0, 130, 1.6f).apply { rightMargin = 12 })
+        btnConnRow.addView(btnDisconnectAll, LinearLayout.LayoutParams(0, 130, 1f))
         connLayout.addView(btnConnRow)
 
         connCard.addView(connLayout)
@@ -221,32 +210,20 @@ class MainActivity : AppCompatActivity() {
             setPadding(28, 24, 28, 24)
             gravity = Gravity.CENTER
         }
-        val btnOn = MaterialButton(this).apply {
-            text = "ACCENDI (ON)"
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            cornerRadius = 26
-            backgroundTintList = ColorStateList.valueOf(Color.parseColor("#E65100"))
-            setTextColor(Color.WHITE)
+        val btnOn = styleCompactButton("ACCENDI (ON)", "#E65100", Color.WHITE, 15f, true).apply {
             setOnClickListener {
                 it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 sendPower(true)
             }
         }
-        val btnOff = MaterialButton(this).apply {
-            text = "SPEGNI (OFF)"
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            cornerRadius = 26
-            backgroundTintList = ColorStateList.valueOf(Color.parseColor("#2E3440"))
-            setTextColor(Color.parseColor("#D8DEE9"))
+        val btnOff = styleCompactButton("SPEGNI (OFF)", "#2E3440", Color.parseColor("#D8DEE9"), 15f, true).apply {
             setOnClickListener {
                 it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 sendPower(false)
             }
         }
-        powerLayout.addView(btnOn, LinearLayout.LayoutParams(0, 145, 1f).apply { rightMargin = 12 })
-        powerLayout.addView(btnOff, LinearLayout.LayoutParams(0, 145, 1f).apply { leftMargin = 12 })
+        powerLayout.addView(btnOn, LinearLayout.LayoutParams(0, 135, 1f).apply { rightMargin = 12 })
+        powerLayout.addView(btnOff, LinearLayout.LayoutParams(0, 135, 1f).apply { leftMargin = 12 })
         powerCard.addView(powerLayout)
         mainContainer.addView(powerCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 24 })
 
@@ -280,22 +257,17 @@ class MainActivity : AppCompatActivity() {
         }
         dialLayout.addView(rotaryDial, LinearLayout.LayoutParams(680, 680).apply {
             topMargin = 12
-            bottomMargin = 12
+            bottomMargin = 16
         })
 
+        // Preset rapidi: 40 °C, 48 °C, 57 °C (Modalità 3 LED max)
         val presetRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        val presets = listOf(40, 48, 55)
+        val presets = listOf(40, 48, 57)
         for (p in presets) {
-            val btnPreset = MaterialButton(this).apply {
-                text = "$p °C"
-                textSize = 14f
-                typeface = Typeface.DEFAULT_BOLD
-                cornerRadius = 22
-                backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
-                setTextColor(Color.WHITE)
+            val btnPreset = styleCompactButton("$p °C", "#252A34", Color.WHITE, 15f, true).apply {
                 setOnClickListener {
                     it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     currentTemp = p
@@ -303,7 +275,7 @@ class MainActivity : AppCompatActivity() {
                     sendTemperature(p)
                 }
             }
-            presetRow.addView(btnPreset, LinearLayout.LayoutParams(0, 125, 1f).apply {
+            presetRow.addView(btnPreset, LinearLayout.LayoutParams(0, 120, 1f).apply {
                 leftMargin = 8
                 rightMargin = 8
             })
@@ -322,7 +294,7 @@ class MainActivity : AppCompatActivity() {
 
         val timerHeaderRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, 16)
+            setPadding(0, 0, 0, 18)
         }
         timerHeaderRow.addView(TextView(this).apply {
             text = "TIMER AUTO-OFF"
@@ -346,12 +318,7 @@ class MainActivity : AppCompatActivity() {
         }
         val timers = listOf(30 to "30m", 60 to "60m", 90 to "90m", 0 to "OFF")
         for ((mins, label) in timers) {
-            val btnT = MaterialButton(this).apply {
-                text = label
-                textSize = 13f
-                cornerRadius = 20
-                backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
-                setTextColor(Color.WHITE)
+            val btnT = styleCompactButton(label, "#252A34", Color.WHITE, 14f, true).apply {
                 setOnClickListener {
                     it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     setAutoOffTimer(mins)
@@ -368,6 +335,29 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(mainContainer)
         setContentView(root)
+    }
+
+    private fun styleCompactButton(
+        label: String,
+        bgHex: String,
+        textColor: Int,
+        sizeSp: Float,
+        bold: Boolean
+    ): MaterialButton {
+        return MaterialButton(this).apply {
+            text = label
+            textSize = sizeSp
+            if (bold) typeface = Typeface.DEFAULT_BOLD
+            cornerRadius = 22
+            insetTop = 0
+            insetBottom = 0
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(8, 0, 8, 0)
+            gravity = Gravity.CENTER
+            backgroundTintList = ColorStateList.valueOf(Color.parseColor(bgHex))
+            setTextColor(textColor)
+        }
     }
 
     private fun createCard(): MaterialCardView {
@@ -424,7 +414,7 @@ class MainActivity : AppCompatActivity() {
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
                 "Dotata di connessione automatica istantanea, ghiera termica aptica, lettura batteria e timer intelligente.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 2.1 Pro"
+                "Versione: 2.2 Pro"
             )
             .setPositiveButton("Chiudi", null)
             .show()
@@ -436,7 +426,7 @@ class MainActivity : AppCompatActivity() {
         val scanner = adapter?.bluetoothLeScanner ?: return
         val found = mutableListOf<BluetoothDevice>()
 
-        btnConnectAuto.text = "RICERCA IN CORSO..."
+        btnConnectAuto.text = "RICERCA..."
         btnConnectAuto.isEnabled = false
 
         val callback = object : ScanCallback() {
@@ -522,12 +512,12 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                // 1. Handshake iniziale
+                // 1. Handshake iniziale XINKE
                 writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
-                // 2. Attiva notifiche su TUTTI i canali del servizio FFF0
+                // 2. Abilita notifiche su tutti i canali BLE disponibili
                 handler.postDelayed({ enableAllNotifications(gatt) }, 300)
-                // 3. Richiede esplicitamente stato batteria
-                handler.postDelayed({ queryBattery(gatt) }, 900)
+                // 3. Richiede telemetria batteria
+                handler.postDelayed({ queryBattery(gatt) }, 1100)
             }
 
             private fun handleIncomingBytes(data: ByteArray) {
@@ -536,18 +526,24 @@ class MainActivity : AppCompatActivity() {
                 if (data.size == 1) {
                     val v = data[0].toInt() and 0xFF
                     if (v in 1..100) pct = v
-                } else if (data.size >= 7 && (data[0].toInt() and 0xFF) == 0xBC) {
-                    // Pacchetto XINKE standard: BC <cmd> <len> <type> <id> <val> BB
-                    val cmd = data[1].toInt() and 0xFF
-                    val v5 = data[5].toInt() and 0xFF
-                    if ((cmd == 0x03 || cmd == 0x04 || cmd == 0xC1 || cmd == 0xC2) && v5 in 1..100) {
-                        pct = v5
+                } else if ((data[0].toInt() and 0xFF) == 0xBC) {
+                    // Cerca valori percentuali o tacche nei byte utili del frame XINKE (indici 2..size-2)
+                    for (i in 2 until data.size - 1) {
+                        val v = data[i].toInt() and 0xFF
+                        if (v in 10..100 && v != 0xC1 && v != 0xC2 && v != 0xC3) {
+                            pct = v
+                            break
+                        }
                     }
-                }
-                if (pct == -1) {
+                    // Se il chip riporta solo il numero di tacche (1..4) sull'indice 4 o 5
+                    if (pct == -1 && data.size >= 6) {
+                        val bars = data[data.size - 2].toInt() and 0xFF
+                        if (bars in 1..4) pct = bars * 25
+                    }
+                } else {
                     for (b in data) {
                         val v = b.toInt() and 0xFF
-                        if (v in 5..100 && v != 0xBC && v != 0xBB && v != 0xC1 && v != 0xC2 && v != 0x07) {
+                        if (v in 5..100) {
                             pct = v
                             break
                         }
@@ -579,29 +575,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enableAllNotifications(gatt: BluetoothGatt) {
-        val customSvc = gatt.getService(SERVICE_UUID) ?: return
         var delay = 0L
-        for (char in customSvc.characteristics) {
-            if ((char.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 ||
-                (char.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
-                handler.postDelayed({
-                    gatt.setCharacteristicNotification(char, true)
-                    val desc = char.getDescriptor(CCCD_UUID)
-                    if (desc != null) {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            gatt.writeDescriptor(desc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            @Suppress("DEPRECATION")
-                            gatt.writeDescriptor(desc)
+        for (svc in gatt.services) {
+            for (char in svc.characteristics) {
+                val props = char.properties
+                if ((props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 ||
+                    (props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
+                    handler.postDelayed({
+                        gatt.setCharacteristicNotification(char, true)
+                        val desc = char.getDescriptor(CCCD_UUID)
+                        if (desc != null) {
+                            val enableVal = if ((props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0)
+                                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                            else
+                                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                gatt.writeDescriptor(desc, enableVal)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                desc.value = enableVal
+                                @Suppress("DEPRECATION")
+                                gatt.writeDescriptor(desc)
+                            }
                         }
-                    }
-                }, delay)
-                delay += 200L
+                    }, delay)
+                    delay += 180L
+                }
             }
         }
-        // Controlla anche eventuale Battery Service standard (0x180F)
         handler.postDelayed({
             val battSvc = gatt.getService(BATTERY_SERVICE_UUID)
             val battChar = battSvc?.getCharacteristic(BATTERY_LEVEL_UUID)
@@ -610,11 +611,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun queryBattery(gatt: BluetoothGatt) {
-        // Invia richiesta stato batteria (comando 0x03) e query stato generale (0xC2)
-        writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x03, 0x05, 0x03, 0xBB.toByte()))
-        handler.postDelayed({
-            writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC2.toByte(), 0x05, 0xC2.toByte(), 0xBB.toByte()))
-        }, 200)
+        // Sequenza comandi telemetria/batteria per le diverse revisioni firmware XINKE
+        val cmds = listOf(
+            byteArrayOf(0xBC.toByte(), 0x03, 0x05, 0x03, 0xBB.toByte()),
+            byteArrayOf(0xBC.toByte(), 0x04, 0x05, 0x04, 0xBB.toByte()),
+            byteArrayOf(0xBC.toByte(), 0x05, 0x05, 0x05, 0xBB.toByte()),
+            byteArrayOf(0xBC.toByte(), 0xC2.toByte(), 0x05, 0xC2.toByte(), 0xBB.toByte())
+        )
+        cmds.forEachIndexed { idx, cmd ->
+            handler.postDelayed({ writeBytes(gatt, cmd) }, idx * 200L)
+        }
     }
 
     private fun sendPower(on: Boolean) {
@@ -636,9 +642,16 @@ class MainActivity : AppCompatActivity() {
     private fun writeBytes(gatt: BluetoothGatt, data: ByteArray) {
         val service = gatt.getService(SERVICE_UUID) ?: return
         val char = service.getCharacteristic(WRITE_UUID) ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeCharacteristic(char, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        val writeType = if ((char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0 &&
+            (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) == 0) {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeCharacteristic(char, data, writeType)
+        } else {
+            char.writeType = writeType
             @Suppress("DEPRECATION")
             char.value = data
             @Suppress("DEPRECATION")
