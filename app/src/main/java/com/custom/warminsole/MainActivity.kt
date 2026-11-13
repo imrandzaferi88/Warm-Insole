@@ -71,22 +71,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun vibrateClick(heavy: Boolean = false) {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val effect = if (heavy) VibrationEffect.EFFECT_HEAVY_CLICK else VibrationEffect.EFFECT_TICK
-            vibrator.vibrate(VibrationEffect.createPredefined(effect))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(if (heavy) 35L else 12L)
-        }
-    }
-
     private fun setupUI() {
         val root = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#0F1115"))
@@ -203,7 +187,6 @@ class MainActivity : AppCompatActivity() {
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#1976D2"))
             setTextColor(Color.WHITE)
             setOnClickListener {
-                vibrateClick(true)
                 autoConnectBoth()
             }
         }
@@ -214,7 +197,6 @@ class MainActivity : AppCompatActivity() {
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
             setTextColor(Color.parseColor("#B0B8C4"))
             setOnClickListener {
-                vibrateClick(true)
                 disconnectAll()
             }
         }
@@ -240,7 +222,6 @@ class MainActivity : AppCompatActivity() {
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#E65100"))
             setTextColor(Color.WHITE)
             setOnClickListener {
-                vibrateClick(true)
                 sendPower(true)
             }
         }
@@ -252,7 +233,6 @@ class MainActivity : AppCompatActivity() {
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#2E3440"))
             setTextColor(Color.parseColor("#D8DEE9"))
             setOnClickListener {
-                vibrateClick(true)
                 sendPower(false)
             }
         }
@@ -261,7 +241,7 @@ class MainActivity : AppCompatActivity() {
         powerCard.addView(powerLayout)
         mainContainer.addView(powerCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 24 })
 
-        // --- CARD GHIERA ROTANTE APTICA ---
+        // --- CARD GHIERA ROTANTE ---
         val dialCard = createCard()
         val dialLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -282,7 +262,6 @@ class MainActivity : AppCompatActivity() {
         rotaryDial = RotaryThermostatView(this).apply {
             onTick = { newTemp ->
                 currentTemp = newTemp
-                vibrateClick(false)
             }
             onRelease = { finalTemp ->
                 currentTemp = finalTemp
@@ -294,7 +273,7 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = 12
         })
 
-        // Preset rapidi + tasti -/+
+        // Preset rapidi
         val presetRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -309,7 +288,6 @@ class MainActivity : AppCompatActivity() {
                 backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
                 setTextColor(Color.WHITE)
                 setOnClickListener {
-                    vibrateClick(true)
                     currentTemp = p
                     rotaryDial.setTemperature(p)
                     sendTemperature(p)
@@ -365,7 +343,6 @@ class MainActivity : AppCompatActivity() {
                 backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
                 setTextColor(Color.WHITE)
                 setOnClickListener {
-                    vibrateClick(false)
                     setAutoOffTimer(mins)
                 }
             }
@@ -405,7 +382,6 @@ class MainActivity : AppCompatActivity() {
                 if (remainingSeconds <= 0) {
                     tvTimerStatus.text = "Spente!"
                     sendPower(false)
-                    vibrateClick(true)
                 } else {
                     val m = remainingSeconds / 60
                     val s = remainingSeconds % 60
@@ -435,7 +411,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di connessione automatica istantanea, ghiera termica con feedback aptico, lettura batteria e timer intelligente.\n\n" +
+                "Dotata di connessione automatica istantanea, ghiera termica rotante, lettura batteria e timer intelligente.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
                 "Versione: 2.0 Pro"
             )
@@ -535,9 +511,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                // Handshake iniziale
                 writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
-                // Attiva notifiche per lettura batteria
                 handler.postDelayed({ enableNotifications(gatt) }, 300)
             }
 
@@ -702,10 +676,8 @@ class MainActivity : AppCompatActivity() {
             val radius = (min(width, height) / 2f) - 55f
             val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
 
-            // Cerchio interno scuro
             canvas.drawCircle(cx, cy, radius - 35f, innerCirclePaint)
 
-            // Tacche graduate tutto intorno (da 135° a 405°, totale 270°)
             val startAngle = 135f
             val sweepTotal = 270f
             val steps = maxTemp - minTemp
@@ -727,20 +699,17 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            // Arco sfondo e arco attivo
             canvas.drawArc(rect, startAngle, sweepTotal, false, bgRingPaint)
             val progress = (temp - minTemp).toFloat() / steps
             val currentSweep = progress * sweepTotal
             activeRingPaint.color = accent
             canvas.drawArc(rect, startAngle, currentSweep, false, activeRingPaint)
 
-            // Pomello bianco sulla ghiera
             val knobRad = Math.toRadians((startAngle + currentSweep).toDouble())
             val kx = (cx + cos(knobRad) * radius).toFloat()
             val ky = (cy + sin(knobRad) * radius).toFloat()
             canvas.drawCircle(kx, ky, 24f, knobPaint)
 
-            // Testo centrale
             textTempPaint.color = accent
             canvas.drawText("$temp°", cx, cy + 32f, textTempPaint)
             canvas.drawText("RUOTA PER REGOLARE", cx, cy + 82f, textSubPaint)
@@ -757,10 +726,8 @@ class MainActivity : AppCompatActivity() {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                     var angle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
                     if (angle < 0) angle += 360f
-                    // Normalizza rispetto a startAngle = 135°
                     var rel = angle - 135f
                     if (rel < 0) rel += 360f
-                    // Zona morta in basso (tra 270° e 360° relativi)
                     val clamped = when {
                         rel <= 270f -> rel
                         rel < 315f -> 270f
