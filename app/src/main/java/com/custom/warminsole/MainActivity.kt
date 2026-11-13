@@ -11,6 +11,7 @@ import android.content.res.ColorStateList
 import android.graphics.*
 import android.os.*
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.widget.*
@@ -27,8 +28,6 @@ class MainActivity : AppCompatActivity() {
 
     private val SERVICE_UUID = UUID.fromString("0000FFF0-0000-1000-8000-00805f9b34fb")
     private val WRITE_UUID = UUID.fromString("0000FFF3-0000-1000-8000-00805f9b34fb")
-    private val NOTIFY_UUID_1 = UUID.fromString("0000FFF4-0000-1000-8000-00805f9b34fb")
-    private val NOTIFY_UUID_2 = UUID.fromString("0000FFF1-0000-1000-8000-00805f9b34fb")
     private val BATTERY_SERVICE_UUID = UUID.fromString("0000180F-0000-1000-8000-00805f9b34fb")
     private val BATTERY_LEVEL_UUID = UUID.fromString("00002A19-0000-1000-8000-00805f9b34fb")
     private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -53,11 +52,25 @@ class MainActivity : AppCompatActivity() {
     private var timerRunnable: Runnable? = null
     private var remainingSeconds = 0
 
+    private val batteryPollRunnable = object : Runnable {
+        override fun run() {
+            gatt1?.let { queryBattery(it) }
+            handler.postDelayed({ gatt2?.let { queryBattery(it) } }, 250)
+            handler.postDelayed(this, 15000)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor("#0F1115")
         checkPermissions()
         setupUI()
+        handler.postDelayed(batteryPollRunnable, 5000)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacks(batteryPollRunnable)
     }
 
     private fun checkPermissions() {
@@ -130,7 +143,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 24)
         }
 
-        // Box Soletta 1
         val box1 = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#12151B"))
@@ -151,7 +163,6 @@ class MainActivity : AppCompatActivity() {
         box1.addView(tvStatus1)
         box1.addView(tvBatt1)
 
-        // Box Soletta 2
         val box2 = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#12151B"))
@@ -186,9 +197,7 @@ class MainActivity : AppCompatActivity() {
             cornerRadius = 26
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#1976D2"))
             setTextColor(Color.WHITE)
-            setOnClickListener {
-                autoConnectBoth()
-            }
+            setOnClickListener { autoConnectBoth() }
         }
         btnDisconnectAll = MaterialButton(this).apply {
             text = "SCOLLEGA"
@@ -196,9 +205,7 @@ class MainActivity : AppCompatActivity() {
             cornerRadius = 26
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
             setTextColor(Color.parseColor("#B0B8C4"))
-            setOnClickListener {
-                disconnectAll()
-            }
+            setOnClickListener { disconnectAll() }
         }
         btnConnRow.addView(btnConnectAuto, LinearLayout.LayoutParams(0, 140, 1.6f).apply { rightMargin = 12 })
         btnConnRow.addView(btnDisconnectAll, LinearLayout.LayoutParams(0, 140, 1f))
@@ -222,6 +229,7 @@ class MainActivity : AppCompatActivity() {
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#E65100"))
             setTextColor(Color.WHITE)
             setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 sendPower(true)
             }
         }
@@ -233,6 +241,7 @@ class MainActivity : AppCompatActivity() {
             backgroundTintList = ColorStateList.valueOf(Color.parseColor("#2E3440"))
             setTextColor(Color.parseColor("#D8DEE9"))
             setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 sendPower(false)
             }
         }
@@ -262,6 +271,7 @@ class MainActivity : AppCompatActivity() {
         rotaryDial = RotaryThermostatView(this).apply {
             onTick = { newTemp ->
                 currentTemp = newTemp
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             }
             onRelease = { finalTemp ->
                 currentTemp = finalTemp
@@ -273,7 +283,6 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = 12
         })
 
-        // Preset rapidi
         val presetRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -288,6 +297,7 @@ class MainActivity : AppCompatActivity() {
                 backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
                 setTextColor(Color.WHITE)
                 setOnClickListener {
+                    it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     currentTemp = p
                     rotaryDial.setTemperature(p)
                     sendTemperature(p)
@@ -343,6 +353,7 @@ class MainActivity : AppCompatActivity() {
                 backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
                 setTextColor(Color.WHITE)
                 setOnClickListener {
+                    it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     setAutoOffTimer(mins)
                 }
             }
@@ -411,9 +422,9 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di connessione automatica istantanea, ghiera termica rotante, lettura batteria e timer intelligente.\n\n" +
+                "Dotata di connessione automatica istantanea, ghiera termica aptica, lettura batteria e timer intelligente.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 2.0 Pro"
+                "Versione: 2.1 Pro"
             )
             .setPositiveButton("Chiudi", null)
             .show()
@@ -511,20 +522,34 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                // 1. Handshake iniziale
                 writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
-                handler.postDelayed({ enableNotifications(gatt) }, 300)
+                // 2. Attiva notifiche su TUTTI i canali del servizio FFF0
+                handler.postDelayed({ enableAllNotifications(gatt) }, 300)
+                // 3. Richiede esplicitamente stato batteria
+                handler.postDelayed({ queryBattery(gatt) }, 900)
             }
 
             private fun handleIncomingBytes(data: ByteArray) {
                 if (data.isEmpty()) return
                 var pct = -1
-                if (data.size == 1 && data[0].toInt() in 1..100) {
-                    pct = data[0].toInt()
-                } else {
+                if (data.size == 1) {
+                    val v = data[0].toInt() and 0xFF
+                    if (v in 1..100) pct = v
+                } else if (data.size >= 7 && (data[0].toInt() and 0xFF) == 0xBC) {
+                    // Pacchetto XINKE standard: BC <cmd> <len> <type> <id> <val> BB
+                    val cmd = data[1].toInt() and 0xFF
+                    val v5 = data[5].toInt() and 0xFF
+                    if ((cmd == 0x03 || cmd == 0x04 || cmd == 0xC1 || cmd == 0xC2) && v5 in 1..100) {
+                        pct = v5
+                    }
+                }
+                if (pct == -1) {
                     for (b in data) {
                         val v = b.toInt() and 0xFF
-                        if (v in 5..100 && v != 0xBC && v != 0xBB && v != 0xC1) {
+                        if (v in 5..100 && v != 0xBC && v != 0xBB && v != 0xC1 && v != 0xC2 && v != 0x07) {
                             pct = v
+                            break
                         }
                     }
                 }
@@ -553,28 +578,43 @@ class MainActivity : AppCompatActivity() {
         device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
-    private fun enableNotifications(gatt: BluetoothGatt) {
-        val customSvc = gatt.getService(SERVICE_UUID)
-        val notifyChar = customSvc?.getCharacteristic(NOTIFY_UUID_1) ?: customSvc?.getCharacteristic(NOTIFY_UUID_2)
-        if (notifyChar != null) {
-            gatt.setCharacteristicNotification(notifyChar, true)
-            val desc = notifyChar.getDescriptor(CCCD_UUID)
-            if (desc != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    gatt.writeDescriptor(desc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    @Suppress("DEPRECATION")
-                    gatt.writeDescriptor(desc)
-                }
+    private fun enableAllNotifications(gatt: BluetoothGatt) {
+        val customSvc = gatt.getService(SERVICE_UUID) ?: return
+        var delay = 0L
+        for (char in customSvc.characteristics) {
+            if ((char.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 ||
+                (char.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
+                handler.postDelayed({
+                    gatt.setCharacteristicNotification(char, true)
+                    val desc = char.getDescriptor(CCCD_UUID)
+                    if (desc != null) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            gatt.writeDescriptor(desc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                            @Suppress("DEPRECATION")
+                            gatt.writeDescriptor(desc)
+                        }
+                    }
+                }, delay)
+                delay += 200L
             }
         }
-        val battSvc = gatt.getService(BATTERY_SERVICE_UUID)
-        val battChar = battSvc?.getCharacteristic(BATTERY_LEVEL_UUID)
-        if (battChar != null) {
-            gatt.readCharacteristic(battChar)
-        }
+        // Controlla anche eventuale Battery Service standard (0x180F)
+        handler.postDelayed({
+            val battSvc = gatt.getService(BATTERY_SERVICE_UUID)
+            val battChar = battSvc?.getCharacteristic(BATTERY_LEVEL_UUID)
+            if (battChar != null) gatt.readCharacteristic(battChar)
+        }, delay + 100L)
+    }
+
+    private fun queryBattery(gatt: BluetoothGatt) {
+        // Invia richiesta stato batteria (comando 0x03) e query stato generale (0xC2)
+        writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x03, 0x05, 0x03, 0xBB.toByte()))
+        handler.postDelayed({
+            writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC2.toByte(), 0x05, 0xC2.toByte(), 0xBB.toByte()))
+        }, 200)
     }
 
     private fun sendPower(on: Boolean) {
@@ -654,6 +694,7 @@ class MainActivity : AppCompatActivity() {
 
         init {
             setLayerType(LAYER_TYPE_SOFTWARE, null)
+            isHapticFeedbackEnabled = true
         }
 
         fun setTemperature(newTemp: Int) {
