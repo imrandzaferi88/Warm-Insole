@@ -32,8 +32,7 @@ class MainActivity : AppCompatActivity() {
 
     private val SERVICE_UUID = UUID.fromString("0000FFF0-0000-1000-8000-00805f9b34fb")
     private val WRITE_UUID = UUID.fromString("0000FFF3-0000-1000-8000-00805f9b34fb")
-    private val BATTERY_SERVICE_UUID = UUID.fromString("0000180F-0000-1000-8000-00805f9b34fb")
-    private val BATTERY_LEVEL_UUID = UUID.fromString("00002A19-0000-1000-8000-00805f9b34fb")
+    private val NOTIFY_UUID = UUID.fromString("0000FFF4-0000-1000-8000-00805f9b34fb")
     private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private var gatt1: BluetoothGatt? = null
@@ -58,8 +57,8 @@ class MainActivity : AppCompatActivity() {
 
     private val batteryPollRunnable = object : Runnable {
         override fun run() {
-            gatt1?.let { queryBattery(it) }
-            handler.postDelayed({ gatt2?.let { queryBattery(it) } }, 600)
+            gatt1?.let { queryBattery(it, 1) }
+            handler.postDelayed({ gatt2?.let { queryBattery(it, 2) } }, 400)
             handler.postDelayed(this, 15000)
         }
     }
@@ -69,7 +68,7 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor = Color.parseColor("#0F1115")
         checkPermissions()
         setupUI()
-        handler.postDelayed(batteryPollRunnable, 4000)
+        handler.postDelayed(batteryPollRunnable, 3500)
     }
 
     override fun onDestroy() {
@@ -121,6 +120,34 @@ class MainActivity : AppCompatActivity() {
                 }
             } else {
                 Toast.makeText(this, "Ottimizzazione batteria già disattivata (Non limitata)!", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun eleLevelToPercent(raw: Int): Int {
+        // Scala originale XINKE/WarmLife: 0..9 -> 0..100%
+        return when (raw) {
+            9 -> 100
+            8 -> 89
+            7 -> 78
+            6 -> 67
+            5 -> 56
+            4 -> 44
+            3 -> 33
+            2 -> 22
+            1 -> 11
+            0 -> 0
+            in 10..100 -> raw
+            else -> -1
+        }
+    }
+
+    private fun updateBatteryUI(slot: Int, rawEle: Int) {
+        val pct = eleLevelToPercent(rawEle)
+        if (pct in 0..100) {
+            runOnUiThread {
+                val label = "Batteria: $pct% (${rawEle.coerceIn(0, 9)}/9)"
+                if (slot == 1) tvBatt1.text = label else tvBatt2.text = label
             }
         }
     }
@@ -190,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(24, 20, 24, 20)
         }
         tvStatus1 = TextView(this).apply {
-            text = "● Soletta 1: Off"
+            text = "● Soletta 1 (SX): Off"
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#8E96A4"))
@@ -210,7 +237,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(24, 20, 24, 20)
         }
         tvStatus2 = TextView(this).apply {
-            text = "● Soletta 2: Off"
+            text = "● Soletta 2 (DX): Off"
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#8E96A4"))
@@ -460,9 +487,9 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di connessione automatica istantanea, servizio background permanente, ghiera termica aptica e timer intelligente.\n\n" +
+                "Dotata di connessione automatica istantanea, servizio background permanente, ghiera termica aptica, telemetria batteria nativa e timer intelligente.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 2.3 Pro"
+                "Versione: 2.4 Pro"
             )
             .setPositiveButton("Chiudi", null)
             .show()
@@ -483,11 +510,26 @@ class MainActivity : AppCompatActivity() {
                 val name = dev.name ?: ""
                 if (name.contains("XINKE", ignoreCase = true) && found.none { it.address == dev.address }) {
                     found.add(dev)
-                    if (found.size == 1 && gatt1 == null) {
+                    val rawBytes = result.scanRecord?.bytes
+                    // Dal protocollo WarmLife: scanRecord[13] = lato (1=SX, 2=DX), scanRecord[15] = batteria (0..9)
+                    val side = if (rawBytes != null && rawBytes.size > 13 && rawBytes[13].toInt() == 2) 2 else 1
+                    val scanEle = if (rawBytes != null && rawBytes.size > 15) rawBytes[15].toInt() and 0xFF else -1
+
+                    val targetSlot = when {
+                        side == 1 && gatt1 == null && dev1 == null -> 1
+                        side == 2 && gatt2 == null && dev2 == null -> 2
+                        gatt1 == null && dev1 == null -> 1
+                        gatt2 == null && dev2 == null -> 2
+                        else -> 0
+                    }
+
+                    if (targetSlot == 1) {
                         dev1 = dev
+                        if (scanEle in 0..9) updateBatteryUI(1, scanEle)
                         connectSlot(dev, slot = 1)
-                    } else if (found.size == 2 && gatt2 == null) {
+                    } else if (targetSlot == 2) {
                         dev2 = dev
+                        if (scanEle in 0..9) updateBatteryUI(2, scanEle)
                         connectSlot(dev, slot = 2)
                     }
                 }
@@ -519,11 +561,11 @@ class MainActivity : AppCompatActivity() {
         gatt2 = null
         dev2 = null
 
-        tvStatus1.text = "● Soletta 1: Off"
+        tvStatus1.text = "● Soletta 1 (SX): Off"
         tvStatus1.setTextColor(Color.parseColor("#8E96A4"))
         tvBatt1.text = "Batteria: --%"
 
-        tvStatus2.text = "● Soletta 2: Off"
+        tvStatus2.text = "● Soletta 2 (DX): Off"
         tvStatus2.setTextColor(Color.parseColor("#8E96A4"))
         tvBatt2.text = "Batteria: --%"
     }
@@ -537,25 +579,23 @@ class MainActivity : AppCompatActivity() {
                         startKeepAliveService("Solette collegate — Temperatura: $currentTemp °C")
                         if (slot == 1) {
                             gatt1 = gatt
-                            tvStatus1.text = "● Soletta 1: Attiva"
+                            tvStatus1.text = "● Soletta 1 (SX): Attiva"
                             tvStatus1.setTextColor(Color.parseColor("#66BB6A"))
                         } else {
                             gatt2 = gatt
-                            tvStatus2.text = "● Soletta 2: Attiva"
+                            tvStatus2.text = "● Soletta 2 (DX): Attiva"
                             tvStatus2.setTextColor(Color.parseColor("#66BB6A"))
                         }
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         if (slot == 1) {
                             gatt1 = null
-                            tvStatus1.text = "● Soletta 1: Off"
+                            tvStatus1.text = "● Soletta 1 (SX): Off"
                             tvStatus1.setTextColor(Color.parseColor("#8E96A4"))
-                            tvBatt1.text = "Batteria: --%"
                             if (!manualDisconnect) handler.postDelayed({ dev1?.let { connectSlot(it, 1) } }, 2000)
                         } else {
                             gatt2 = null
-                            tvStatus2.text = "● Soletta 2: Off"
+                            tvStatus2.text = "● Soletta 2 (DX): Off"
                             tvStatus2.setTextColor(Color.parseColor("#8E96A4"))
-                            tvBatt2.text = "Batteria: --%"
                             if (!manualDisconnect) handler.postDelayed({ dev2?.let { connectSlot(it, 2) } }, 2000)
                         }
                         if (gatt1 == null && gatt2 == null && manualDisconnect) {
@@ -566,34 +606,31 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
-                handler.postDelayed({ enableAllNotifications(gatt) }, 300)
-                handler.postDelayed({ queryBattery(gatt) }, 1100)
+                // 1. Abilita notifica su 0000FFF4 (canale esatto di WarmLife)
+                enableNotifyFFF4(gatt)
+                // 2. Handshake iniziale BC C1 05 C1 BB
+                handler.postDelayed({
+                    writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
+                }, 300)
+                // 3. Query telemetria esatta WarmLife (BC CC 07 03 <side> CC BB)
+                handler.postDelayed({ queryBattery(gatt, slot) }, 750)
             }
 
             private fun handleIncomingBytes(data: ByteArray) {
                 if (data.isEmpty()) return
-                val hexStr = data.joinToString(" ") { String.format("%02X", it) }
-                var pct = -1
-                if (data.size == 1) {
-                    val v = data[0].toInt() and 0xFF
-                    if (v in 1..100) pct = v
-                } else if ((data[0].toInt() and 0xFF) == 0xBC) {
-                    for (i in 2 until data.size - 1) {
-                        val v = data[i].toInt() and 0xFF
-                        if (v in 10..100 && v != 0xC1 && v != 0xC2 && v != 0xC3) {
-                            pct = v
-                            break
-                        }
-                    }
-                    if (pct == -1 && data.size >= 6) {
-                        val bars = data[data.size - 2].toInt() and 0xFF
-                        if (bars in 1..4) pct = bars * 25
-                    }
+                // Pacchetto telemetria originale WarmLife: length >= 15, data[1] == 1, data[3] == 3, data[13] = batteria (0..9)
+                if (data.size >= 15 && (data[1].toInt() and 0xFF) == 1 && (data[3].toInt() and 0xFF) == 3) {
+                    val rawEle = data[13].toInt() and 0xFF
+                    val sideSlot = if ((data[4].toInt() and 0xFF) == 2) 2 else slot
+                    updateBatteryUI(sideSlot, rawEle)
+                    return
                 }
-                runOnUiThread {
-                    val label = if (pct in 1..100) "Batteria: $pct%" else "RX: $hexStr"
-                    if (slot == 1) tvBatt1.text = label else tvBatt2.text = label
+                // Fallback nel caso di risposta compatta con valore 1..9 o 10..100
+                if ((data[0].toInt() and 0xFF) == 0xBC && data.size >= 6) {
+                    val candidate = data[data.size - 2].toInt() and 0xFF
+                    if (candidate in 1..9) {
+                        updateBatteryUI(slot, candidate)
+                    }
                 }
             }
 
@@ -605,61 +642,29 @@ class MainActivity : AppCompatActivity() {
             override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
                 characteristic.value?.let { handleIncomingBytes(it) }
             }
-
-            @Suppress("DEPRECATION")
-            override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-                characteristic.value?.let { handleIncomingBytes(it) }
-            }
         }
         device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
-    private fun enableAllNotifications(gatt: BluetoothGatt) {
-        var delay = 0L
-        for (svc in gatt.services) {
-            for (char in svc.characteristics) {
-                val props = char.properties
-                if ((props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 ||
-                    (props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
-                    handler.postDelayed({
-                        gatt.setCharacteristicNotification(char, true)
-                        val desc = char.getDescriptor(CCCD_UUID)
-                        if (desc != null) {
-                            val enableVal = if ((props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0)
-                                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-                            else
-                                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                gatt.writeDescriptor(desc, enableVal)
-                            } else {
-                                @Suppress("DEPRECATION")
-                                desc.value = enableVal
-                                @Suppress("DEPRECATION")
-                                gatt.writeDescriptor(desc)
-                            }
-                        }
-                    }, delay)
-                    delay += 180L
-                }
-            }
+    private fun enableNotifyFFF4(gatt: BluetoothGatt) {
+        val service = gatt.getService(SERVICE_UUID) ?: return
+        val notifyChar = service.getCharacteristic(NOTIFY_UUID) ?: return
+        gatt.setCharacteristicNotification(notifyChar, true)
+        val desc = notifyChar.getDescriptor(CCCD_UUID) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeDescriptor(desc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        } else {
+            @Suppress("DEPRECATION")
+            desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            @Suppress("DEPRECATION")
+            gatt.writeDescriptor(desc)
         }
-        handler.postDelayed({
-            val battSvc = gatt.getService(BATTERY_SERVICE_UUID)
-            val battChar = battSvc?.getCharacteristic(BATTERY_LEVEL_UUID)
-            if (battChar != null) gatt.readCharacteristic(battChar)
-        }, delay + 100L)
     }
 
-    private fun queryBattery(gatt: BluetoothGatt) {
-        val cmds = listOf(
-            byteArrayOf(0xBC.toByte(), 0x03, 0x05, 0x03, 0xBB.toByte()),
-            byteArrayOf(0xBC.toByte(), 0x04, 0x05, 0x04, 0xBB.toByte()),
-            byteArrayOf(0xBC.toByte(), 0x05, 0x05, 0x05, 0xBB.toByte()),
-            byteArrayOf(0xBC.toByte(), 0xC2.toByte(), 0x05, 0xC2.toByte(), 0xBB.toByte())
-        )
-        cmds.forEachIndexed { idx, cmd ->
-            handler.postDelayed({ writeBytes(gatt, cmd) }, idx * 200L)
-        }
+    private fun queryBattery(gatt: BluetoothGatt, slot: Int) {
+        // Comando originale WarmLife sendGetMes: BC CC 07 03 <1=SX / 2=DX> CC BB
+        val sideByte: Byte = if (slot == 2) 0x02 else 0x01
+        writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xCC.toByte(), 0x07, 0x03, sideByte, 0xCC.toByte(), 0xBB.toByte()))
     }
 
     private fun sendPower(on: Boolean) {
@@ -687,16 +692,9 @@ class MainActivity : AppCompatActivity() {
     private fun writeBytes(gatt: BluetoothGatt, data: ByteArray) {
         val service = gatt.getService(SERVICE_UUID) ?: return
         val char = service.getCharacteristic(WRITE_UUID) ?: return
-        val writeType = if ((char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0 &&
-            (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) == 0) {
-            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        } else {
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeCharacteristic(char, data, writeType)
+            gatt.writeCharacteristic(char, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         } else {
-            char.writeType = writeType
             @Suppress("DEPRECATION")
             char.value = data
             @Suppress("DEPRECATION")
