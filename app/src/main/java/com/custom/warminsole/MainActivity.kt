@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -39,7 +40,13 @@ class MainActivity : AppCompatActivity() {
     private var gatt2: BluetoothGatt? = null
     private var dev1: BluetoothDevice? = null
     private var dev2: BluetoothDevice? = null
+    private var connecting1 = false
+    private var connecting2 = false
     private var manualDisconnect = false
+
+    private var activeScanCallback: ScanCallback? = null
+    private var scanTimeoutRunnable: Runnable? = null
+    private var isScanning = false
 
     private lateinit var btnConnectAuto: MaterialButton
     private lateinit var btnDisconnectAll: MaterialButton
@@ -73,6 +80,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopBleScan()
         handler.removeCallbacks(batteryPollRunnable)
     }
 
@@ -125,7 +133,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun eleLevelToPercent(raw: Int): Int {
-        // Scala originale XINKE/WarmLife: 0..9 -> 0..100%
         return when (raw) {
             9 -> 100
             8 -> 89
@@ -148,6 +155,23 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 val label = "Batteria: $pct% (${rawEle.coerceIn(0, 9)}/9)"
                 if (slot == 1) tvBatt1.text = label else tvBatt2.text = label
+            }
+        }
+    }
+
+    private fun updateScanButtonState() {
+        runOnUiThread {
+            val connectedCount = (if (gatt1 != null) 1 else 0) + (if (gatt2 != null) 1 else 0)
+            if (connectedCount >= 2) {
+                stopBleScan()
+                btnConnectAuto.text = "COLLEGA ENTRAMBE"
+                btnConnectAuto.isEnabled = true
+            } else if (isScanning) {
+                btnConnectAuto.text = "RICERCA ($connectedCount/2)..."
+                btnConnectAuto.isEnabled = false
+            } else {
+                btnConnectAuto.text = "COLLEGA ENTRAMBE"
+                btnConnectAuto.isEnabled = true
             }
         }
     }
@@ -487,75 +511,127 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di connessione automatica istantanea, servizio background permanente, ghiera termica aptica, telemetria batteria nativa e timer intelligente.\n\n" +
+                "Dotata di aggancio continuo automatico per entrambe le solette, servizio background permanente, ghiera termica aptica, telemetria batteria nativa e timer intelligente.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 2.4 Pro"
+                "Versione: 2.5 Pro"
             )
             .setPositiveButton("Chiudi", null)
             .show()
     }
 
+    private fun stopBleScan() {
+        scanTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        scanTimeoutRunnable = null
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        activeScanCallback?.let {
+            try {
+                adapter?.bluetoothLeScanner?.stopScan(it)
+            } catch (_: Exception) {
+            }
+        }
+        activeScanCallback = null
+        isScanning = false
+    }
+
     private fun autoConnectBoth() {
+        if (gatt1 != null && gatt2 != null) {
+            Toast.makeText(this, "Entrambe le solette sono già collegate!", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         manualDisconnect = false
+        stopBleScan()
+
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         val scanner = adapter?.bluetoothLeScanner ?: return
-        val found = mutableListOf<BluetoothDevice>()
 
-        btnConnectAuto.text = "RICERCA..."
-        btnConnectAuto.isEnabled = false
+        isScanning = true
+        updateScanButtonState()
+
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
 
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val dev = result.device
                 val name = dev.name ?: ""
-                if (name.contains("XINKE", ignoreCase = true) && found.none { it.address == dev.address }) {
-                    found.add(dev)
-                    val rawBytes = result.scanRecord?.bytes
-                    // Dal protocollo WarmLife: scanRecord[13] = lato (1=SX, 2=DX), scanRecord[15] = batteria (0..9)
-                    val side = if (rawBytes != null && rawBytes.size > 13 && rawBytes[13].toInt() == 2) 2 else 1
-                    val scanEle = if (rawBytes != null && rawBytes.size > 15) rawBytes[15].toInt() and 0xFF else -1
+                if (!name.contains("XINKE", ignoreCase = true)) return
 
-                    val targetSlot = when {
-                        side == 1 && gatt1 == null && dev1 == null -> 1
-                        side == 2 && gatt2 == null && dev2 == null -> 2
-                        gatt1 == null && dev1 == null -> 1
-                        gatt2 == null && dev2 == null -> 2
-                        else -> 0
-                    }
+                // Ignora dispositivo se già collegato o già in fase di connessione
+                if (dev1?.address == dev.address && (gatt1 != null || connecting1)) return
+                if (dev2?.address == dev.address && (gatt2 != null || connecting2)) return
 
-                    if (targetSlot == 1) {
-                        dev1 = dev
-                        if (scanEle in 0..9) updateBatteryUI(1, scanEle)
-                        connectSlot(dev, slot = 1)
-                    } else if (targetSlot == 2) {
-                        dev2 = dev
-                        if (scanEle in 0..9) updateBatteryUI(2, scanEle)
-                        connectSlot(dev, slot = 2)
-                    }
+                val rawBytes = result.scanRecord?.bytes
+                val sideByte = if (rawBytes != null && rawBytes.size > 13) rawBytes[13].toInt() and 0xFF else 0
+                val scanEle = if (rawBytes != null && rawBytes.size > 15) rawBytes[15].toInt() and 0xFF else -1
+
+                val slot1Free = (gatt1 == null && !connecting1)
+                val slot2Free = (gatt2 == null && !connecting2)
+
+                val targetSlot = when {
+                    sideByte == 1 && slot1Free -> 1
+                    sideByte == 2 && slot2Free -> 2
+                    dev1?.address == dev.address && slot1Free -> 1
+                    dev2?.address == dev.address && slot2Free -> 2
+                    slot1Free && dev2?.address != dev.address -> 1
+                    slot2Free && dev1?.address != dev.address -> 2
+                    else -> 0
+                }
+
+                if (targetSlot == 1) {
+                    dev1 = dev
+                    connecting1 = true
+                    if (scanEle in 0..9) updateBatteryUI(1, scanEle)
+                    tvStatus1.text = "● Soletta 1 (SX): Connessione..."
+                    tvStatus1.setTextColor(Color.parseColor("#FFB74D"))
+                    val delay = if (connecting2) 450L else 0L
+                    handler.postDelayed({ connectSlot(dev, slot = 1) }, delay)
+                } else if (targetSlot == 2) {
+                    dev2 = dev
+                    connecting2 = true
+                    if (scanEle in 0..9) updateBatteryUI(2, scanEle)
+                    tvStatus2.text = "● Soletta 2 (DX): Connessione..."
+                    tvStatus2.setTextColor(Color.parseColor("#FFB74D"))
+                    val delay = if (connecting1 || gatt1 != null) 450L else 0L
+                    handler.postDelayed({ connectSlot(dev, slot = 2) }, delay)
                 }
             }
         }
 
-        scanner.startScan(callback)
-        handler.postDelayed({
-            scanner.stopScan(callback)
-            btnConnectAuto.text = "COLLEGA ENTRAMBE"
-            btnConnectAuto.isEnabled = true
-            if (found.isEmpty()) {
-                Toast.makeText(this, "Nessuna soletta trovata. Accendile prima.", Toast.LENGTH_SHORT).show()
+        activeScanCallback = callback
+        scanner.startScan(null, settings, callback)
+
+        // Ricerca continua fino a 30 secondi finché entrambe non si agganciano
+        scanTimeoutRunnable = Runnable {
+            if (isScanning) {
+                stopBleScan()
+                updateScanButtonState()
+                val connectedCount = (if (gatt1 != null) 1 else 0) + (if (gatt2 != null) 1 else 0)
+                if (connectedCount < 2) {
+                    Toast.makeText(
+                        this,
+                        "Collegate $connectedCount su 2. Controlla che entrambe siano accese.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
-        }, 3500)
+        }
+        handler.postDelayed(scanTimeoutRunnable!!, 30000L)
     }
 
     private fun disconnectAll() {
         manualDisconnect = true
+        stopBleScan()
         stopKeepAliveService()
 
+        connecting1 = false
         gatt1?.disconnect()
         gatt1?.close()
         gatt1 = null
         dev1 = null
 
+        connecting2 = false
         gatt2?.disconnect()
         gatt2?.close()
         gatt2 = null
@@ -568,6 +644,8 @@ class MainActivity : AppCompatActivity() {
         tvStatus2.text = "● Soletta 2 (DX): Off"
         tvStatus2.setTextColor(Color.parseColor("#8E96A4"))
         tvBatt2.text = "Batteria: --%"
+
+        updateScanButtonState()
     }
 
     private fun connectSlot(device: BluetoothDevice, slot: Int) {
@@ -578,26 +656,54 @@ class MainActivity : AppCompatActivity() {
                         gatt.discoverServices()
                         startKeepAliveService("Solette collegate — Temperatura: $currentTemp °C")
                         if (slot == 1) {
+                            connecting1 = false
                             gatt1 = gatt
                             tvStatus1.text = "● Soletta 1 (SX): Attiva"
                             tvStatus1.setTextColor(Color.parseColor("#66BB6A"))
                         } else {
+                            connecting2 = false
                             gatt2 = gatt
                             tvStatus2.text = "● Soletta 2 (DX): Attiva"
                             tvStatus2.setTextColor(Color.parseColor("#66BB6A"))
                         }
+                        updateScanButtonState()
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        try {
+                            gatt.close()
+                        } catch (_: Exception) {
+                        }
                         if (slot == 1) {
+                            connecting1 = false
                             gatt1 = null
                             tvStatus1.text = "● Soletta 1 (SX): Off"
                             tvStatus1.setTextColor(Color.parseColor("#8E96A4"))
-                            if (!manualDisconnect) handler.postDelayed({ dev1?.let { connectSlot(it, 1) } }, 2000)
+                            if (!manualDisconnect) {
+                                handler.postDelayed({
+                                    if (!manualDisconnect && gatt1 == null && !connecting1) {
+                                        dev1?.let {
+                                            connecting1 = true
+                                            connectSlot(it, 1)
+                                        }
+                                    }
+                                }, 1800)
+                            }
                         } else {
+                            connecting2 = false
                             gatt2 = null
                             tvStatus2.text = "● Soletta 2 (DX): Off"
                             tvStatus2.setTextColor(Color.parseColor("#8E96A4"))
-                            if (!manualDisconnect) handler.postDelayed({ dev2?.let { connectSlot(it, 2) } }, 2000)
+                            if (!manualDisconnect) {
+                                handler.postDelayed({
+                                    if (!manualDisconnect && gatt2 == null && !connecting2) {
+                                        dev2?.let {
+                                            connecting2 = true
+                                            connectSlot(it, 2)
+                                        }
+                                    }
+                                }, 1800)
+                            }
                         }
+                        updateScanButtonState()
                         if (gatt1 == null && gatt2 == null && manualDisconnect) {
                             stopKeepAliveService()
                         }
@@ -606,26 +712,21 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                // 1. Abilita notifica su 0000FFF4 (canale esatto di WarmLife)
                 enableNotifyFFF4(gatt)
-                // 2. Handshake iniziale BC C1 05 C1 BB
                 handler.postDelayed({
                     writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
                 }, 300)
-                // 3. Query telemetria esatta WarmLife (BC CC 07 03 <side> CC BB)
                 handler.postDelayed({ queryBattery(gatt, slot) }, 750)
             }
 
             private fun handleIncomingBytes(data: ByteArray) {
                 if (data.isEmpty()) return
-                // Pacchetto telemetria originale WarmLife: length >= 15, data[1] == 1, data[3] == 3, data[13] = batteria (0..9)
                 if (data.size >= 15 && (data[1].toInt() and 0xFF) == 1 && (data[3].toInt() and 0xFF) == 3) {
                     val rawEle = data[13].toInt() and 0xFF
                     val sideSlot = if ((data[4].toInt() and 0xFF) == 2) 2 else slot
                     updateBatteryUI(sideSlot, rawEle)
                     return
                 }
-                // Fallback nel caso di risposta compatta con valore 1..9 o 10..100
                 if ((data[0].toInt() and 0xFF) == 0xBC && data.size >= 6) {
                     val candidate = data[data.size - 2].toInt() and 0xFF
                     if (candidate in 1..9) {
@@ -662,7 +763,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun queryBattery(gatt: BluetoothGatt, slot: Int) {
-        // Comando originale WarmLife sendGetMes: BC CC 07 03 <1=SX / 2=DX> CC BB
         val sideByte: Byte = if (slot == 2) 0x02 else 0x01
         writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xCC.toByte(), 0x07, 0x03, sideByte, 0xCC.toByte(), 0xBB.toByte()))
     }
