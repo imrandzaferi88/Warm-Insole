@@ -6,10 +6,13 @@ import android.bluetooth.*
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.*
+import android.net.Uri
 import android.os.*
+import android.provider.Settings
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -18,6 +21,7 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import java.util.*
@@ -74,13 +78,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissions() {
-        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        val perms = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms.add(Manifest.permission.BLUETOOTH_SCAN)
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
         } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            perms.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
-        if (perms.any { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
-            ActivityCompat.requestPermissions(this, perms, 1)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        val missing = perms.filter {
+            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1)
+        }
+    }
+
+    private fun startKeepAliveService(status: String) {
+        val intent = Intent(this, InsoleKeepAliveService::class.java).apply {
+            putExtra("status", status)
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun stopKeepAliveService() {
+        stopService(Intent(this, InsoleKeepAliveService::class.java))
+    }
+
+    private fun requestBatteryUnrestricted() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
+            } else {
+                Toast.makeText(this, "Ottimizzazione batteria già disattivata (Non limitata)!", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -156,7 +197,7 @@ class MainActivity : AppCompatActivity() {
         }
         tvBatt1 = TextView(this).apply {
             text = "Batteria: --%"
-            textSize = 13f
+            textSize = 12f
             setTextColor(Color.parseColor("#B0B8C4"))
             setPadding(0, 6, 0, 0)
         }
@@ -176,7 +217,7 @@ class MainActivity : AppCompatActivity() {
         }
         tvBatt2 = TextView(this).apply {
             text = "Batteria: --%"
-            textSize = 13f
+            textSize = 12f
             setTextColor(Color.parseColor("#B0B8C4"))
             setPadding(0, 6, 0, 0)
         }
@@ -260,7 +301,6 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = 16
         })
 
-        // Preset rapidi: 40 °C, 48 °C, 57 °C (Modalità 3 LED max)
         val presetRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -397,12 +437,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun showOverflowMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
-        popup.menu.add(0, 1, 0, "About Us")
+        popup.menu.add(0, 1, 0, "Mantieni attiva (Batteria)")
+        popup.menu.add(0, 2, 1, "About Us")
         popup.setOnMenuItemClickListener { item ->
-            if (item.itemId == 1) {
-                showAboutDialog()
-                true
-            } else false
+            when (item.itemId) {
+                1 -> {
+                    requestBatteryUnrestricted()
+                    true
+                }
+                2 -> {
+                    showAboutDialog()
+                    true
+                }
+                else -> false
+            }
         }
         popup.show()
     }
@@ -412,9 +460,9 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di connessione automatica istantanea, ghiera termica aptica, lettura batteria e timer intelligente.\n\n" +
+                "Dotata di connessione automatica istantanea, servizio background permanente, ghiera termica aptica e timer intelligente.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 2.2 Pro"
+                "Versione: 2.3 Pro"
             )
             .setPositiveButton("Chiudi", null)
             .show()
@@ -459,6 +507,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun disconnectAll() {
         manualDisconnect = true
+        stopKeepAliveService()
+
         gatt1?.disconnect()
         gatt1?.close()
         gatt1 = null
@@ -484,6 +534,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
                         gatt.discoverServices()
+                        startKeepAliveService("Solette collegate — Temperatura: $currentTemp °C")
                         if (slot == 1) {
                             gatt1 = gatt
                             tvStatus1.text = "● Soletta 1: Attiva"
@@ -507,27 +558,27 @@ class MainActivity : AppCompatActivity() {
                             tvBatt2.text = "Batteria: --%"
                             if (!manualDisconnect) handler.postDelayed({ dev2?.let { connectSlot(it, 2) } }, 2000)
                         }
+                        if (gatt1 == null && gatt2 == null && manualDisconnect) {
+                            stopKeepAliveService()
+                        }
                     }
                 }
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                // 1. Handshake iniziale XINKE
                 writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
-                // 2. Abilita notifiche su tutti i canali BLE disponibili
                 handler.postDelayed({ enableAllNotifications(gatt) }, 300)
-                // 3. Richiede telemetria batteria
                 handler.postDelayed({ queryBattery(gatt) }, 1100)
             }
 
             private fun handleIncomingBytes(data: ByteArray) {
                 if (data.isEmpty()) return
+                val hexStr = data.joinToString(" ") { String.format("%02X", it) }
                 var pct = -1
                 if (data.size == 1) {
                     val v = data[0].toInt() and 0xFF
                     if (v in 1..100) pct = v
                 } else if ((data[0].toInt() and 0xFF) == 0xBC) {
-                    // Cerca valori percentuali o tacche nei byte utili del frame XINKE (indici 2..size-2)
                     for (i in 2 until data.size - 1) {
                         val v = data[i].toInt() and 0xFF
                         if (v in 10..100 && v != 0xC1 && v != 0xC2 && v != 0xC3) {
@@ -535,25 +586,14 @@ class MainActivity : AppCompatActivity() {
                             break
                         }
                     }
-                    // Se il chip riporta solo il numero di tacche (1..4) sull'indice 4 o 5
                     if (pct == -1 && data.size >= 6) {
                         val bars = data[data.size - 2].toInt() and 0xFF
                         if (bars in 1..4) pct = bars * 25
                     }
-                } else {
-                    for (b in data) {
-                        val v = b.toInt() and 0xFF
-                        if (v in 5..100) {
-                            pct = v
-                            break
-                        }
-                    }
                 }
-                if (pct in 1..100) {
-                    runOnUiThread {
-                        if (slot == 1) tvBatt1.text = "Batteria: $pct%"
-                        else tvBatt2.text = "Batteria: $pct%"
-                    }
+                runOnUiThread {
+                    val label = if (pct in 1..100) "Batteria: $pct%" else "RX: $hexStr"
+                    if (slot == 1) tvBatt1.text = label else tvBatt2.text = label
                 }
             }
 
@@ -611,7 +651,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun queryBattery(gatt: BluetoothGatt) {
-        // Sequenza comandi telemetria/batteria per le diverse revisioni firmware XINKE
         val cmds = listOf(
             byteArrayOf(0xBC.toByte(), 0x03, 0x05, 0x03, 0xBB.toByte()),
             byteArrayOf(0xBC.toByte(), 0x04, 0x05, 0x04, 0xBB.toByte()),
@@ -625,6 +664,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendPower(on: Boolean) {
         val state: Byte = if (on) 0x01 else 0x00
+        if (gatt1 != null || gatt2 != null) {
+            startKeepAliveService(if (on) "Riscaldamento ON — $currentTemp °C" else "Solette collegate — Standby (OFF)")
+        }
         gatt1?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, 0x01, state, 0xBB.toByte())) }
         handler.postDelayed({
             gatt2?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, 0x01, state, 0xBB.toByte())) }
@@ -633,6 +675,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendTemperature(temp: Int) {
         val t = temp.toByte()
+        if (gatt1 != null || gatt2 != null) {
+            startKeepAliveService("Solette attive — Temperatura: $temp °C")
+        }
         gatt1?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, 0x01, t, 0xBB.toByte())) }
         handler.postDelayed({
             gatt2?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, 0x01, t, 0xBB.toByte())) }
