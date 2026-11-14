@@ -2,6 +2,8 @@ package com.custom.warminsole
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.bluetooth.*
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
@@ -22,9 +24,11 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.switchmaterial.SwitchMaterial
 import java.util.*
 import kotlin.math.*
 
@@ -35,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private val WRITE_UUID = UUID.fromString("0000FFF3-0000-1000-8000-00805f9b34fb")
     private val NOTIFY_UUID = UUID.fromString("0000FFF4-0000-1000-8000-00805f9b34fb")
     private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+    private val LOW_BATT_CHANNEL_ID = "warminsole_low_battery_channel"
 
     private var gatt1: BluetoothGatt? = null
     private var gatt2: BluetoothGatt? = null
@@ -44,23 +49,35 @@ class MainActivity : AppCompatActivity() {
     private var connecting2 = false
     private var manualDisconnect = false
 
+    private var lowBattAlerted1 = false
+    private var lowBattAlerted2 = false
+
     private var activeScanCallback: ScanCallback? = null
     private var scanTimeoutRunnable: Runnable? = null
     private var isScanning = false
 
     private lateinit var btnConnectAuto: MaterialButton
     private lateinit var btnDisconnectAll: MaterialButton
+    private lateinit var switchAutoStart: SwitchMaterial
     private lateinit var tvStatus1: TextView
     private lateinit var tvStatus2: TextView
     private lateinit var tvBatt1: TextView
     private lateinit var tvBatt2: TextView
     private lateinit var rotaryDial: RotaryThermostatView
+    private lateinit var btnBoost: MaterialButton
+    private lateinit var tvBoostStatus: TextView
     private lateinit var tvTimerStatus: TextView
 
+    // Nessuna memoria temperatura: parte sempre da 40°
     private var currentTemp = 40
     private val handler = Handler(Looper.getMainLooper())
+
     private var timerRunnable: Runnable? = null
     private var remainingSeconds = 0
+
+    private var boostRunnable: Runnable? = null
+    private var boostRemainingSeconds = 0
+    private var isBoostActive = false
 
     private val batteryPollRunnable = object : Runnable {
         override fun run() {
@@ -73,15 +90,31 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor("#0F1115")
-        checkPermissions()
+        createLowBatteryChannel()
         setupUI()
         handler.postDelayed(batteryPollRunnable, 3500)
+
+        if (hasBlePermissions()) {
+            triggerAutoConnectIfEnabled()
+        } else {
+            checkPermissions()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         stopBleScan()
+        cancelBoost(updateUi = false)
         handler.removeCallbacks(batteryPollRunnable)
+    }
+
+    private fun hasBlePermissions(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private fun checkPermissions() {
@@ -101,6 +134,94 @@ class MainActivity : AppCompatActivity() {
         if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1)
         }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1 && hasBlePermissions()) {
+            triggerAutoConnectIfEnabled()
+        }
+    }
+
+    private fun isAutoConnectOnStartEnabled(): Boolean {
+        return getSharedPreferences("warminsole_prefs", Context.MODE_PRIVATE)
+            .getBoolean("auto_connect_on_start", true)
+    }
+
+    private fun setAutoConnectOnStartEnabled(enabled: Boolean) {
+        getSharedPreferences("warminsole_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("auto_connect_on_start", enabled)
+            .apply()
+    }
+
+    private fun triggerAutoConnectIfEnabled() {
+        if (isAutoConnectOnStartEnabled()) {
+            handler.postDelayed({
+                if (!manualDisconnect && gatt1 == null && gatt2 == null && !isScanning) {
+                    autoConnectBoth()
+                }
+            }, 400)
+        }
+    }
+
+    private fun createLowBatteryChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                LOW_BATT_CHANNEL_ID,
+                "Avviso Batteria Scarica Solette",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Avvisa quando una soletta raggiunge l'ultima tacchetta di batteria"
+                enableVibration(true)
+            }
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.createNotificationChannel(channel)
+        }
+    }
+
+    private fun triggerLowBatteryAlert(slot: Int, rawEle: Int) {
+        val alreadyAlerted = if (slot == 1) lowBattAlerted1 else lowBattAlerted2
+        if (alreadyAlerted) return
+
+        if (slot == 1) lowBattAlerted1 = true else lowBattAlerted2 = true
+
+        val sideName = if (slot == 1) "Soletta 1 (SX)" else "Soletta 2 (DX)"
+        val msg = "$sideName all'ultima tacchetta ($rawEle/9)! Prepara il cambio batteria."
+
+        // Vibrazione telefono
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 350, 150, 350), -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(500)
+            }
+        } catch (_: Exception) {
+        }
+
+        // Notifica sonora/visiva
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            val notification = NotificationCompat.Builder(this, LOW_BATT_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setContentTitle("Batteria Scarica — $sideName")
+                .setContentText(msg)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(200 + slot, notification)
+        }
+
+        Toast.makeText(this, "⚠️ $msg", Toast.LENGTH_LONG).show()
     }
 
     private fun startKeepAliveService(status: String) {
@@ -154,7 +275,19 @@ class MainActivity : AppCompatActivity() {
         if (pct in 0..100) {
             runOnUiThread {
                 val label = "Batteria: $pct% (${rawEle.coerceIn(0, 9)}/9)"
-                if (slot == 1) tvBatt1.text = label else tvBatt2.text = label
+                if (slot == 1) {
+                    tvBatt1.text = label
+                    tvBatt1.setTextColor(if (rawEle <= 1) Color.parseColor("#FF5252") else Color.parseColor("#B0B8C4"))
+                } else {
+                    tvBatt2.text = label
+                    tvBatt2.setTextColor(if (rawEle <= 1) Color.parseColor("#FF5252") else Color.parseColor("#B0B8C4"))
+                }
+                // Ultima tacchetta: livello <= 1 (1/9 o 0/9)
+                if (rawEle in 0..1) {
+                    triggerLowBatteryAlert(slot, rawEle)
+                } else if (rawEle >= 3) {
+                    if (slot == 1) lowBattAlerted1 = false else lowBattAlerted2 = false
+                }
             }
         }
     }
@@ -227,8 +360,29 @@ class MainActivity : AppCompatActivity() {
         val connCard = createCard()
         val connLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 28, 32, 32)
+            setPadding(32, 24, 32, 32)
         }
+
+        val autoRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(4, 0, 4, 18)
+        }
+        autoRow.addView(TextView(this).apply {
+            text = "Auto-Connect all'apertura"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#D8DEE9"))
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        })
+        switchAutoStart = SwitchMaterial(this).apply {
+            isChecked = isAutoConnectOnStartEnabled()
+            setOnCheckedChangeListener { _, isChecked ->
+                setAutoConnectOnStartEnabled(isChecked)
+            }
+        }
+        autoRow.addView(switchAutoStart)
+        connLayout.addView(autoRow)
 
         val battRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -311,6 +465,7 @@ class MainActivity : AppCompatActivity() {
         val btnOff = styleCompactButton("SPEGNI (OFF)", "#2E3440", Color.parseColor("#D8DEE9"), 15f, true).apply {
             setOnClickListener {
                 it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                cancelBoost(updateUi = true)
                 sendPower(false)
             }
         }
@@ -319,7 +474,7 @@ class MainActivity : AppCompatActivity() {
         powerCard.addView(powerLayout)
         mainContainer.addView(powerCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 24 })
 
-        // --- CARD GHIERA ROTANTE ---
+        // --- CARD GHIERA ROTANTE & MODALITÀ BOOST ---
         val dialCard = createCard()
         val dialLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -339,6 +494,7 @@ class MainActivity : AppCompatActivity() {
 
         rotaryDial = RotaryThermostatView(this).apply {
             onTick = { newTemp ->
+                if (isBoostActive) cancelBoost(updateUi = true)
                 currentTemp = newTemp
                 performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             }
@@ -361,6 +517,7 @@ class MainActivity : AppCompatActivity() {
             val btnPreset = styleCompactButton("$p °C", "#252A34", Color.WHITE, 15f, true).apply {
                 setOnClickListener {
                     it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    if (isBoostActive) cancelBoost(updateUi = true)
                     currentTemp = p
                     rotaryDial.setTemperature(p)
                     sendTemperature(p)
@@ -371,7 +528,34 @@ class MainActivity : AppCompatActivity() {
                 rightMargin = 8
             })
         }
-        dialLayout.addView(presetRow, LinearLayout.LayoutParams(-1, -2))
+        dialLayout.addView(presetRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16 })
+
+        // Pulsante Modalità Boost (60° per 10 minuti -> poi 45°)
+        btnBoost = styleCompactButton("🔥 BOOST 10m (60° → 45°)", "#B71C1C", Color.WHITE, 14f, true).apply {
+            setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                if (isBoostActive) {
+                    cancelBoost(updateUi = true)
+                } else {
+                    startBoostMode()
+                }
+            }
+        }
+        dialLayout.addView(btnBoost, LinearLayout.LayoutParams(-1, 125).apply {
+            leftMargin = 8
+            rightMargin = 8
+        })
+
+        tvBoostStatus = TextView(this).apply {
+            text = ""
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#FF8A65"))
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            setPadding(0, 10, 0, 0)
+        }
+        dialLayout.addView(tvBoostStatus)
 
         dialCard.addView(dialLayout)
         mainContainer.addView(dialCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 24 })
@@ -428,6 +612,55 @@ class MainActivity : AppCompatActivity() {
         setContentView(root)
     }
 
+    private fun startBoostMode() {
+        cancelBoost(updateUi = false)
+        isBoostActive = true
+        boostRemainingSeconds = 10 * 60 // 10 minuti esatti
+
+        currentTemp = 60
+        rotaryDial.setTemperature(60)
+        sendPower(true)
+        handler.postDelayed({ sendTemperature(60) }, 250)
+
+        btnBoost.text = "ANNULLA BOOST"
+        btnBoost.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#37474F"))
+        tvBoostStatus.visibility = View.VISIBLE
+
+        boostRunnable = object : Runnable {
+            override fun run() {
+                if (!isBoostActive) return
+                if (boostRemainingSeconds <= 0) {
+                    isBoostActive = false
+                    btnBoost.text = "🔥 BOOST 10m (60° → 45°)"
+                    btnBoost.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#B71C1C"))
+                    tvBoostStatus.text = "Boost completato: assestato a 45 °C"
+                    currentTemp = 45
+                    rotaryDial.setTemperature(45)
+                    sendTemperature(45)
+                } else {
+                    val m = boostRemainingSeconds / 60
+                    val s = boostRemainingSeconds % 60
+                    tvBoostStatus.text = String.format("BOOST 60 °C attivo — %02d:%02d al passaggio a 45 °C", m, s)
+                    boostRemainingSeconds--
+                    handler.postDelayed(this, 1000)
+                }
+            }
+        }
+        handler.post(boostRunnable!!)
+    }
+
+    private fun cancelBoost(updateUi: Boolean) {
+        boostRunnable?.let { handler.removeCallbacks(it) }
+        boostRunnable = null
+        isBoostActive = false
+        boostRemainingSeconds = 0
+        if (updateUi && ::btnBoost.isInitialized) {
+            btnBoost.text = "🔥 BOOST 10m (60° → 45°)"
+            btnBoost.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#B71C1C"))
+            tvBoostStatus.visibility = View.GONE
+        }
+    }
+
     private fun styleCompactButton(
         label: String,
         bgHex: String,
@@ -473,6 +706,7 @@ class MainActivity : AppCompatActivity() {
             override fun run() {
                 if (remainingSeconds <= 0) {
                     tvTimerStatus.text = "Spente!"
+                    cancelBoost(updateUi = true)
                     sendPower(false)
                 } else {
                     val m = remainingSeconds / 60
@@ -511,9 +745,9 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di aggancio continuo automatico per entrambe le solette, servizio background permanente, ghiera termica aptica, telemetria batteria nativa e timer intelligente.\n\n" +
+                "Dotata di Auto-Connect all'apertura, aggancio continuo per entrambe le solette, modalità Boost 60°→45°, allerta batteria ultima tacchetta, servizio background permanente e ghiera termica aptica.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 2.5 Pro"
+                "Versione: 3.0 Pro"
             )
             .setPositiveButton("Chiudi", null)
             .show()
@@ -558,7 +792,6 @@ class MainActivity : AppCompatActivity() {
                 val name = dev.name ?: ""
                 if (!name.contains("XINKE", ignoreCase = true)) return
 
-                // Ignora dispositivo se già collegato o già in fase di connessione
                 if (dev1?.address == dev.address && (gatt1 != null || connecting1)) return
                 if (dev2?.address == dev.address && (gatt2 != null || connecting2)) return
 
@@ -602,7 +835,6 @@ class MainActivity : AppCompatActivity() {
         activeScanCallback = callback
         scanner.startScan(null, settings, callback)
 
-        // Ricerca continua fino a 30 secondi finché entrambe non si agganciano
         scanTimeoutRunnable = Runnable {
             if (isScanning) {
                 stopBleScan()
@@ -623,7 +855,11 @@ class MainActivity : AppCompatActivity() {
     private fun disconnectAll() {
         manualDisconnect = true
         stopBleScan()
+        cancelBoost(updateUi = true)
         stopKeepAliveService()
+
+        lowBattAlerted1 = false
+        lowBattAlerted2 = false
 
         connecting1 = false
         gatt1?.disconnect()
@@ -640,10 +876,12 @@ class MainActivity : AppCompatActivity() {
         tvStatus1.text = "● Soletta 1 (SX): Off"
         tvStatus1.setTextColor(Color.parseColor("#8E96A4"))
         tvBatt1.text = "Batteria: --%"
+        tvBatt1.setTextColor(Color.parseColor("#B0B8C4"))
 
         tvStatus2.text = "● Soletta 2 (DX): Off"
         tvStatus2.setTextColor(Color.parseColor("#8E96A4"))
         tvBatt2.text = "Batteria: --%"
+        tvBatt2.setTextColor(Color.parseColor("#B0B8C4"))
 
         updateScanButtonState()
     }
