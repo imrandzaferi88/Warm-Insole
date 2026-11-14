@@ -51,6 +51,9 @@ class InsoleKeepAliveService : Service() {
         var rawEle1 = -1
         var rawEle2 = -1
 
+        var pendingAutoHeatAfterConnect = false
+        var pendingAutoTemp = 45
+
         var isEcoStepEnabled = false
         var ecoStepTriggered1 = false
         var ecoStepTriggered2 = false
@@ -110,6 +113,7 @@ class InsoleKeepAliveService : Service() {
             gatt1?.let { queryBattery(it, 1) }
             handler.postDelayed({ gatt2?.let { queryBattery(it, 2) } }, 400)
             WarmInsoleWidgetProvider.updateAllWidgets(this@InsoleKeepAliveService)
+            WarmInsoleTileService.requestTileUpdate(this@InsoleKeepAliveService)
             onStateChangedListener?.invoke()
             handler.postDelayed(this, 15000L)
         }
@@ -136,6 +140,29 @@ class InsoleKeepAliveService : Service() {
         startForeground(NOTIF_ID, buildNotification(currentStatusText()))
 
         when (intent?.action) {
+            "CMD_TILE_AUTO_45" -> {
+                cancelBoost()
+                if (gatt1 != null || gatt2 != null) {
+                    pendingAutoHeatAfterConnect = false
+                    currentTemp = 45
+                    sendPower(true)
+                    handler.postDelayed({ sendTemperature(45) }, 220L)
+                    if (gatt1 == null || gatt2 == null) {
+                        pendingAutoHeatAfterConnect = true
+                        pendingAutoTemp = 45
+                        autoConnectBoth()
+                    }
+                } else {
+                    pendingAutoHeatAfterConnect = true
+                    pendingAutoTemp = 45
+                    autoConnectBoth()
+                }
+            }
+            "CMD_TILE_TOGGLE_OFF" -> {
+                pendingAutoHeatAfterConnect = false
+                cancelBoost()
+                sendPower(false)
+            }
             WarmInsoleWidgetProvider.ACTION_CONNECT -> {
                 autoConnectBoth()
             }
@@ -176,6 +203,7 @@ class InsoleKeepAliveService : Service() {
                 }
             }
             WarmInsoleWidgetProvider.ACTION_OFF -> {
+                pendingAutoHeatAfterConnect = false
                 cancelBoost()
                 sendPower(false)
             }
@@ -183,6 +211,7 @@ class InsoleKeepAliveService : Service() {
             "CMD_DISCONNECT_ALL" -> disconnectAll()
             "CMD_POWER_ON" -> sendPower(true)
             "CMD_POWER_OFF" -> {
+                pendingAutoHeatAfterConnect = false
                 cancelBoost()
                 sendPower(false)
             }
@@ -219,6 +248,7 @@ class InsoleKeepAliveService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID, buildNotification(currentStatusText()))
         WarmInsoleWidgetProvider.updateAllWidgets(this)
+        WarmInsoleTileService.requestTileUpdate(this)
         onStateChangedListener?.invoke()
     }
 
@@ -243,7 +273,7 @@ class InsoleKeepAliveService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_tile_insole_on)
             .setContentTitle("WarmInsole Pro")
             .setContentText(status)
             .setContentIntent(pending)
@@ -335,6 +365,7 @@ class InsoleKeepAliveService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED
         ) {
+            pendingAutoHeatAfterConnect = false
             return
         }
 
@@ -342,7 +373,10 @@ class InsoleKeepAliveService : Service() {
         stopBleScan()
 
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        val scanner = adapter?.bluetoothLeScanner ?: return
+        val scanner = adapter?.bluetoothLeScanner ?: run {
+            pendingAutoHeatAfterConnect = false
+            return
+        }
 
         isScanning = true
         notifyAllObservers()
@@ -401,6 +435,9 @@ class InsoleKeepAliveService : Service() {
         scanTimeoutRunnable = Runnable {
             if (isScanning) {
                 stopBleScan()
+                if (gatt1 == null && gatt2 == null) {
+                    pendingAutoHeatAfterConnect = false
+                }
                 notifyAllObservers()
             }
         }
@@ -409,6 +446,7 @@ class InsoleKeepAliveService : Service() {
 
     fun disconnectAll() {
         manualDisconnect = true
+        pendingAutoHeatAfterConnect = false
         stopBleScan()
         cancelBoost()
 
@@ -498,6 +536,24 @@ class InsoleKeepAliveService : Service() {
                     writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
                 }, 300L)
                 handler.postDelayed({ queryBattery(gatt, slot) }, 750L)
+
+                if (pendingAutoHeatAfterConnect) {
+                    val targetT = pendingAutoTemp
+                    handler.postDelayed({
+                        if (gatt1 != null || gatt2 != null) {
+                            isHeatingOn = true
+                            currentTemp = targetT
+                            writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, 0x01, 0x01, 0xBB.toByte()))
+                            handler.postDelayed({
+                                writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, 0x01, targetT.toByte(), 0xBB.toByte()))
+                                if (gatt1 != null && gatt2 != null) {
+                                    pendingAutoHeatAfterConnect = false
+                                }
+                                notifyAllObservers()
+                            }, 200L)
+                        }
+                    }, 950L)
+                }
             }
 
             private fun handleIncomingBytes(data: ByteArray) {
