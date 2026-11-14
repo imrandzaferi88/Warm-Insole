@@ -36,6 +36,17 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <service
+            android:name=".WarmInsoleTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_insole_off"
+            android:label="WarmInsole"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".WarmInsoleWidgetProvider"
             android:exported="true"
