@@ -49,8 +49,13 @@ class MainActivity : AppCompatActivity() {
     private var connecting2 = false
     private var manualDisconnect = false
 
+    private var rawEle1 = -1
+    private var rawEle2 = -1
     private var lowBattAlerted1 = false
     private var lowBattAlerted2 = false
+    private var ecoStepTriggered1 = false
+    private var ecoStepTriggered2 = false
+    private var isEcoStepEnabled = false
 
     private var activeScanCallback: ScanCallback? = null
     private var scanTimeoutRunnable: Runnable? = null
@@ -58,17 +63,20 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var btnConnectAuto: MaterialButton
     private lateinit var btnDisconnectAll: MaterialButton
+    private lateinit var btnEcoStep: MaterialButton
     private lateinit var switchAutoStart: SwitchMaterial
     private lateinit var tvStatus1: TextView
     private lateinit var tvStatus2: TextView
     private lateinit var tvBatt1: TextView
     private lateinit var tvBatt2: TextView
+    private lateinit var tvEst1: TextView
+    private lateinit var tvEst2: TextView
     private lateinit var rotaryDial: RotaryThermostatView
     private lateinit var btnBoost: MaterialButton
     private lateinit var tvBoostStatus: TextView
     private lateinit var tvTimerStatus: TextView
 
-    // Nessuna memoria temperatura: parte sempre da 40°
+    // Parte sempre da 40°
     private var currentTemp = 40
     private val handler = Handler(Looper.getMainLooper())
 
@@ -189,7 +197,6 @@ class MainActivity : AppCompatActivity() {
         val sideName = if (slot == 1) "Soletta 1 (SX)" else "Soletta 2 (DX)"
         val msg = "$sideName all'ultima tacchetta ($rawEle/9)! Prepara il cambio batteria."
 
-        // Vibrazione telefono
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
@@ -206,7 +213,6 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
         }
 
-        // Notifica sonora/visiva
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         ) {
@@ -270,22 +276,90 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Interpolazione lineare: 13h (780 min) a 30°C -> 4.5h (270 min) a 60°C
+    private fun estimateRemainingMinutes(rawEle: Int, tempCelsius: Int): Int {
+        val pct = eleLevelToPercent(rawEle)
+        if (pct <= 0) return 0
+        val clampedTemp = tempCelsius.coerceIn(30, 60)
+        val ratio = (clampedTemp - 30).toDouble() / 30.0
+        val fullChargeMinutes = 780.0 - ratio * (780.0 - 270.0)
+        return (fullChargeMinutes * (pct / 100.0)).roundToInt()
+    }
+
+    private fun formatRemainingTime(minutes: Int): String {
+        if (minutes <= 0) return "< 15m"
+        val h = minutes / 60
+        val m = minutes % 60
+        return if (h > 0) String.format("~%dh %02dm", h, m) else String.format("~%dm", m)
+    }
+
+    private fun refreshAllBatteryEstimates() {
+        if (!::tvEst1.isInitialized) return
+        if (rawEle1 in 0..9) {
+            val mins1 = estimateRemainingMinutes(rawEle1, currentTemp)
+            tvEst1.text = "Stima: ${formatRemainingTime(mins1)} a $currentTemp°"
+        } else {
+            tvEst1.text = "Stima: --"
+        }
+        if (rawEle2 in 0..9) {
+            val mins2 = estimateRemainingMinutes(rawEle2, currentTemp)
+            tvEst2.text = "Stima: ${formatRemainingTime(mins2)} a $currentTemp°"
+        } else {
+            tvEst2.text = "Stima: --"
+        }
+    }
+
+    private fun checkEcoStepReduction(slot: Int, rawEle: Int) {
+        if (!isEcoStepEnabled) return
+        if (rawEle !in 1..2) return
+        val alreadyTriggered = if (slot == 1) ecoStepTriggered1 else ecoStepTriggered2
+        if (alreadyTriggered) return
+
+        if (slot == 1) ecoStepTriggered1 = true else ecoStepTriggered2 = true
+
+        if (isBoostActive) cancelBoost(updateUi = true)
+        val reducedTemp = (currentTemp - 5).coerceAtLeast(35)
+        if (reducedTemp < currentTemp) {
+            currentTemp = reducedTemp
+            rotaryDial.setTemperature(currentTemp)
+            sendTemperature(currentTemp)
+            refreshAllBatteryEstimates()
+            val sideName = if (slot == 1) "Soletta SX" else "Soletta DX"
+            Toast.makeText(
+                this,
+                "🌿 Eco-Step attivo ($sideName al 22%): temperatura ridotta a $currentTemp °C",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     private fun updateBatteryUI(slot: Int, rawEle: Int) {
         val pct = eleLevelToPercent(rawEle)
         if (pct in 0..100) {
             runOnUiThread {
-                val label = "Batteria: $pct% (${rawEle.coerceIn(0, 9)}/9)"
+                val clampedRaw = rawEle.coerceIn(0, 9)
+                val label = "Batteria: $pct% ($clampedRaw/9)"
                 if (slot == 1) {
+                    rawEle1 = clampedRaw
                     tvBatt1.text = label
-                    tvBatt1.setTextColor(if (rawEle <= 1) Color.parseColor("#FF5252") else Color.parseColor("#B0B8C4"))
+                    tvBatt1.setTextColor(if (clampedRaw <= 1) Color.parseColor("#FF5252") else Color.parseColor("#B0B8C4"))
                 } else {
+                    rawEle2 = clampedRaw
                     tvBatt2.text = label
-                    tvBatt2.setTextColor(if (rawEle <= 1) Color.parseColor("#FF5252") else Color.parseColor("#B0B8C4"))
+                    tvBatt2.setTextColor(if (clampedRaw <= 1) Color.parseColor("#FF5252") else Color.parseColor("#B0B8C4"))
                 }
-                // Ultima tacchetta: livello <= 1 (1/9 o 0/9)
-                if (rawEle in 0..1) {
-                    triggerLowBatteryAlert(slot, rawEle)
-                } else if (rawEle >= 3) {
+
+                refreshAllBatteryEstimates()
+
+                if (clampedRaw in 1..2) {
+                    checkEcoStepReduction(slot, clampedRaw)
+                } else if (clampedRaw >= 4) {
+                    if (slot == 1) ecoStepTriggered1 = false else ecoStepTriggered2 = false
+                }
+
+                if (clampedRaw in 0..1) {
+                    triggerLowBatteryAlert(slot, clampedRaw)
+                } else if (clampedRaw >= 3) {
                     if (slot == 1) lowBattAlerted1 = false else lowBattAlerted2 = false
                 }
             }
@@ -306,6 +380,24 @@ class MainActivity : AppCompatActivity() {
                 btnConnectAuto.text = "COLLEGA ENTRAMBE"
                 btnConnectAuto.isEnabled = true
             }
+        }
+    }
+
+    private fun toggleEcoStepMode() {
+        isEcoStepEnabled = !isEcoStepEnabled
+        if (isEcoStepEnabled) {
+            btnEcoStep.text = "🌿 ECO-STEP ATTIVO (-5° sotto 22%)"
+            btnEcoStep.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#2E7D32"))
+            btnEcoStep.setTextColor(Color.WHITE)
+            // Verifica immediata se una delle due è già <= 22%
+            if (rawEle1 in 1..2) checkEcoStepReduction(1, rawEle1)
+            else if (rawEle2 in 1..2) checkEcoStepReduction(2, rawEle2)
+        } else {
+            ecoStepTriggered1 = false
+            ecoStepTriggered2 = false
+            btnEcoStep.text = "🌿 ECO-STEP: OFF (-5° sotto 22%)"
+            btnEcoStep.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#252A34"))
+            btnEcoStep.setTextColor(Color.parseColor("#B0B8C4"))
         }
     }
 
@@ -386,7 +478,7 @@ class MainActivity : AppCompatActivity() {
 
         val battRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, 24)
+            setPadding(0, 0, 0, 18)
         }
 
         val box1 = LinearLayout(this).apply {
@@ -406,8 +498,16 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#B0B8C4"))
             setPadding(0, 6, 0, 0)
         }
+        tvEst1 = TextView(this).apply {
+            text = "Stima: --"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#4FC3F7"))
+            setPadding(0, 4, 0, 0)
+        }
         box1.addView(tvStatus1)
         box1.addView(tvBatt1)
+        box1.addView(tvEst1)
 
         val box2 = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -426,12 +526,29 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#B0B8C4"))
             setPadding(0, 6, 0, 0)
         }
+        tvEst2 = TextView(this).apply {
+            text = "Stima: --"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#4FC3F7"))
+            setPadding(0, 4, 0, 0)
+        }
         box2.addView(tvStatus2)
         box2.addView(tvBatt2)
+        box2.addView(tvEst2)
 
         battRow.addView(box1, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 10 })
         battRow.addView(box2, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = 10 })
         connLayout.addView(battRow)
+
+        // Pulsante Risparmio Energetico Eco-Step (manuale)
+        btnEcoStep = styleCompactButton("🌿 ECO-STEP: OFF (-5° sotto 22%)", "#252A34", Color.parseColor("#B0B8C4"), 13f, true).apply {
+            setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                toggleEcoStepMode()
+            }
+        }
+        connLayout.addView(btnEcoStep, LinearLayout.LayoutParams(-1, 110).apply { bottomMargin = 18 })
 
         val btnConnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -496,10 +613,12 @@ class MainActivity : AppCompatActivity() {
             onTick = { newTemp ->
                 if (isBoostActive) cancelBoost(updateUi = true)
                 currentTemp = newTemp
+                refreshAllBatteryEstimates()
                 performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             }
             onRelease = { finalTemp ->
                 currentTemp = finalTemp
+                refreshAllBatteryEstimates()
                 sendTemperature(finalTemp)
             }
         }
@@ -520,6 +639,7 @@ class MainActivity : AppCompatActivity() {
                     if (isBoostActive) cancelBoost(updateUi = true)
                     currentTemp = p
                     rotaryDial.setTemperature(p)
+                    refreshAllBatteryEstimates()
                     sendTemperature(p)
                 }
             }
@@ -530,7 +650,6 @@ class MainActivity : AppCompatActivity() {
         }
         dialLayout.addView(presetRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16 })
 
-        // Pulsante Modalità Boost (60° per 10 minuti -> poi 45°)
         btnBoost = styleCompactButton("🔥 BOOST 10m (60° → 45°)", "#B71C1C", Color.WHITE, 14f, true).apply {
             setOnClickListener {
                 it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -615,10 +734,11 @@ class MainActivity : AppCompatActivity() {
     private fun startBoostMode() {
         cancelBoost(updateUi = false)
         isBoostActive = true
-        boostRemainingSeconds = 10 * 60 // 10 minuti esatti
+        boostRemainingSeconds = 10 * 60
 
         currentTemp = 60
         rotaryDial.setTemperature(60)
+        refreshAllBatteryEstimates()
         sendPower(true)
         handler.postDelayed({ sendTemperature(60) }, 250)
 
@@ -636,6 +756,7 @@ class MainActivity : AppCompatActivity() {
                     tvBoostStatus.text = "Boost completato: assestato a 45 °C"
                     currentTemp = 45
                     rotaryDial.setTemperature(45)
+                    refreshAllBatteryEstimates()
                     sendTemperature(45)
                 } else {
                     val m = boostRemainingSeconds / 60
@@ -745,9 +866,9 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di Auto-Connect all'apertura, aggancio continuo per entrambe le solette, modalità Boost 60°→45°, allerta batteria ultima tacchetta, servizio background permanente e ghiera termica aptica.\n\n" +
+                "Dotata di Auto-Connect all'apertura, stima dinamica dell'autonomia residua, Eco-Step automatico, modalità Boost 60°→45°, allerta batteria ultima tacchetta e ghiera termica aptica.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 3.0 Pro"
+                "Versione: 3.2 Pro"
             )
             .setPositiveButton("Chiudi", null)
             .show()
@@ -858,8 +979,12 @@ class MainActivity : AppCompatActivity() {
         cancelBoost(updateUi = true)
         stopKeepAliveService()
 
+        rawEle1 = -1
+        rawEle2 = -1
         lowBattAlerted1 = false
         lowBattAlerted2 = false
+        ecoStepTriggered1 = false
+        ecoStepTriggered2 = false
 
         connecting1 = false
         gatt1?.disconnect()
@@ -877,11 +1002,13 @@ class MainActivity : AppCompatActivity() {
         tvStatus1.setTextColor(Color.parseColor("#8E96A4"))
         tvBatt1.text = "Batteria: --%"
         tvBatt1.setTextColor(Color.parseColor("#B0B8C4"))
+        tvEst1.text = "Stima: --"
 
         tvStatus2.text = "● Soletta 2 (DX): Off"
         tvStatus2.setTextColor(Color.parseColor("#8E96A4"))
         tvBatt2.text = "Batteria: --%"
         tvBatt2.setTextColor(Color.parseColor("#B0B8C4"))
+        tvEst2.text = "Stima: --"
 
         updateScanButtonState()
     }
