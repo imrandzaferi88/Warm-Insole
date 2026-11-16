@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.widget.RemoteViews
 import androidx.core.content.ContextCompat
 
@@ -38,10 +39,14 @@ class WarmInsoleWidgetProvider : AppWidgetProvider() {
 
             val stateLabel = when {
                 !c1 && !c2 -> "Scollegate"
-                isHeating -> "${temp}°C • ON"
+                isHeating -> "${temp}°C • ATTIVE"
                 else -> "${temp}°C • Standby"
             }
             views.setTextViewText(R.id.tv_widget_header, "WarmInsole • $stateLabel")
+            views.setTextColor(
+                R.id.tv_widget_header,
+                if (isHeating) Color.parseColor("#FF8A65") else Color.WHITE
+            )
 
             val sxText = if (c1 && InsoleKeepAliveService.rawEle1 in 0..9) {
                 val pct = InsoleKeepAliveService.eleLevelToPercent(InsoleKeepAliveService.rawEle1)
@@ -67,6 +72,11 @@ class WarmInsoleWidgetProvider : AppWidgetProvider() {
                 "DX: Off"
             }
             views.setTextViewText(R.id.tv_widget_batt, "$sxText   •   $dxText")
+
+            // Etichette preset aggiornate a 45° / 58° / 70°
+            views.setTextViewText(R.id.btn_widget_low, "45°")
+            views.setTextViewText(R.id.btn_widget_med, "58°")
+            views.setTextViewText(R.id.btn_widget_max, "70°")
 
             val connectLabel = when {
                 c1 && c2 -> "2/2 OK"
