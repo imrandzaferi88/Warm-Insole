@@ -38,6 +38,8 @@ class InsoleKeepAliveService : Service() {
         var gatt2: BluetoothGatt? = null
         var dev1: BluetoothDevice? = null
         var dev2: BluetoothDevice? = null
+        var sideByte1: Byte = 0x01
+        var sideByte2: Byte = 0x02
         var connecting1 = false
         var connecting2 = false
         var manualDisconnect = false
@@ -46,7 +48,7 @@ class InsoleKeepAliveService : Service() {
         val isConnected1: Boolean get() = gatt1 != null
         val isConnected2: Boolean get() = gatt2 != null
 
-        var currentTemp = 40
+        var currentTemp = 45
         var isHeatingOn = false
         var rawEle1 = -1
         var rawEle2 = -1
@@ -88,9 +90,9 @@ class InsoleKeepAliveService : Service() {
         fun estimateRemainingMinutes(rawEle: Int, tempCelsius: Int): Int {
             val pct = eleLevelToPercent(rawEle)
             if (pct <= 0) return 0
-            val clampedTemp = tempCelsius.coerceIn(30, 60)
-            val ratio = (clampedTemp - 30).toDouble() / 30.0
-            val fullChargeMinutes = 780.0 - ratio * (780.0 - 270.0)
+            val clampedTemp = tempCelsius.coerceIn(30, 70)
+            val ratio = (clampedTemp - 30).toDouble() / 40.0
+            val fullChargeMinutes = 780.0 - ratio * (780.0 - 210.0)
             return (fullChargeMinutes * (pct / 100.0)).roundToInt()
         }
 
@@ -110,8 +112,8 @@ class InsoleKeepAliveService : Service() {
 
     private val batteryPollRunnable = object : Runnable {
         override fun run() {
-            gatt1?.let { queryBattery(it, 1) }
-            handler.postDelayed({ gatt2?.let { queryBattery(it, 2) } }, 400)
+            gatt1?.let { queryBattery(it, sideByte1) }
+            handler.postDelayed({ gatt2?.let { queryBattery(it, sideByte2) } }, 400)
             WarmInsoleWidgetProvider.updateAllWidgets(this@InsoleKeepAliveService)
             WarmInsoleTileService.requestTileUpdate(this@InsoleKeepAliveService)
             onStateChangedListener?.invoke()
@@ -168,38 +170,38 @@ class InsoleKeepAliveService : Service() {
             }
             WarmInsoleWidgetProvider.ACTION_ON -> {
                 cancelBoost()
-                currentTemp = 40
+                currentTemp = 45
                 sendPower(true)
-                handler.postDelayed({ sendTemperature(40) }, 220)
+                handler.postDelayed({ sendTemperature(45) }, 220)
             }
             WarmInsoleWidgetProvider.ACTION_LOW -> {
                 cancelBoost()
-                currentTemp = 40
+                currentTemp = 45
                 if (!isHeatingOn) {
                     sendPower(true)
-                    handler.postDelayed({ sendTemperature(40) }, 220)
+                    handler.postDelayed({ sendTemperature(45) }, 220)
                 } else {
-                    sendTemperature(40)
+                    sendTemperature(45)
                 }
             }
             WarmInsoleWidgetProvider.ACTION_MED -> {
                 cancelBoost()
-                currentTemp = 48
+                currentTemp = 58
                 if (!isHeatingOn) {
                     sendPower(true)
-                    handler.postDelayed({ sendTemperature(48) }, 220)
+                    handler.postDelayed({ sendTemperature(58) }, 220)
                 } else {
-                    sendTemperature(48)
+                    sendTemperature(58)
                 }
             }
             WarmInsoleWidgetProvider.ACTION_MAX -> {
                 cancelBoost()
-                currentTemp = 57
+                currentTemp = 70
                 if (!isHeatingOn) {
                     sendPower(true)
-                    handler.postDelayed({ sendTemperature(57) }, 220)
+                    handler.postDelayed({ sendTemperature(70) }, 220)
                 } else {
-                    sendTemperature(57)
+                    sendTemperature(70)
                 }
             }
             WarmInsoleWidgetProvider.ACTION_OFF -> {
@@ -216,7 +218,7 @@ class InsoleKeepAliveService : Service() {
                 sendPower(false)
             }
             "CMD_SET_TEMP" -> {
-                val t = intent.getIntExtra("temp", 40)
+                val t = intent.getIntExtra("temp", 45).coerceIn(30, 70)
                 cancelBoost()
                 currentTemp = t
                 sendTemperature(t)
@@ -285,9 +287,9 @@ class InsoleKeepAliveService : Service() {
         cancelBoost()
         isBoostActive = true
         boostRemainingSeconds = 10 * 60
-        currentTemp = 60
+        currentTemp = 70
         sendPower(true)
-        handler.postDelayed({ sendTemperature(60) }, 250)
+        handler.postDelayed({ sendTemperature(70) }, 250)
         notifyAllObservers()
 
         boostRunnable = object : Runnable {
@@ -295,8 +297,8 @@ class InsoleKeepAliveService : Service() {
                 if (!isBoostActive) return
                 if (boostRemainingSeconds <= 0) {
                     isBoostActive = false
-                    currentTemp = 45
-                    sendTemperature(45)
+                    currentTemp = 50
+                    sendTemperature(50)
                     notifyAllObservers()
                 } else {
                     boostRemainingSeconds--
@@ -395,15 +397,15 @@ class InsoleKeepAliveService : Service() {
                 if (dev2?.address == dev.address && (gatt2 != null || connecting2)) return
 
                 val rawBytes = result.scanRecord?.bytes
-                val sideByte = if (rawBytes != null && rawBytes.size > 13) rawBytes[13].toInt() and 0xFF else 0
+                val detectedSide = if (rawBytes != null && rawBytes.size > 13) rawBytes[13].toInt() and 0xFF else 0
                 val scanEle = if (rawBytes != null && rawBytes.size > 15) rawBytes[15].toInt() and 0xFF else -1
 
                 val slot1Free = (gatt1 == null && !connecting1)
                 val slot2Free = (gatt2 == null && !connecting2)
 
                 val targetSlot = when {
-                    sideByte == 1 && slot1Free -> 1
-                    sideByte == 2 && slot2Free -> 2
+                    detectedSide == 1 && slot1Free -> 1
+                    detectedSide == 2 && slot2Free -> 2
                     dev1?.address == dev.address && slot1Free -> 1
                     dev2?.address == dev.address && slot2Free -> 2
                     slot1Free && dev2?.address != dev.address -> 1
@@ -413,18 +415,20 @@ class InsoleKeepAliveService : Service() {
 
                 if (targetSlot == 1) {
                     dev1 = dev
+                    sideByte1 = if (detectedSide == 2) 0x02 else 0x01
                     connecting1 = true
                     if (scanEle in 0..9) handleBatteryUpdate(1, scanEle)
                     notifyAllObservers()
                     val delay = if (connecting2) 450L else 0L
-                    handler.postDelayed({ connectSlot(dev, 1) }, delay)
+                    handler.postDelayed({ connectSlot(dev, 1, sideByte1) }, delay)
                 } else if (targetSlot == 2) {
                     dev2 = dev
+                    sideByte2 = if (detectedSide == 1) 0x01 else 0x02
                     connecting2 = true
                     if (scanEle in 0..9) handleBatteryUpdate(2, scanEle)
                     notifyAllObservers()
                     val delay = if (connecting1 || gatt1 != null) 450L else 0L
-                    handler.postDelayed({ connectSlot(dev, 2) }, delay)
+                    handler.postDelayed({ connectSlot(dev, 2, sideByte2) }, delay)
                 }
             }
         }
@@ -463,17 +467,19 @@ class InsoleKeepAliveService : Service() {
         gatt1?.close()
         gatt1 = null
         dev1 = null
+        sideByte1 = 0x01
 
         connecting2 = false
         gatt2?.disconnect()
         gatt2?.close()
         gatt2 = null
         dev2 = null
+        sideByte2 = 0x02
 
         notifyAllObservers()
     }
 
-    private fun connectSlot(device: BluetoothDevice, slot: Int) {
+    private fun connectSlot(device: BluetoothDevice, slot: Int, sideByte: Byte) {
         val gattCallback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 handler.post {
@@ -503,7 +509,7 @@ class InsoleKeepAliveService : Service() {
                                     if (!manualDisconnect && gatt1 == null && !connecting1) {
                                         dev1?.let {
                                             connecting1 = true
-                                            connectSlot(it, 1)
+                                            connectSlot(it, 1, sideByte1)
                                         }
                                     }
                                 }, 1800L)
@@ -516,7 +522,7 @@ class InsoleKeepAliveService : Service() {
                                     if (!manualDisconnect && gatt2 == null && !connecting2) {
                                         dev2?.let {
                                             connecting2 = true
-                                            connectSlot(it, 2)
+                                            connectSlot(it, 2, sideByte2)
                                         }
                                     }
                                 }, 1800L)
@@ -535,17 +541,17 @@ class InsoleKeepAliveService : Service() {
                 handler.postDelayed({
                     writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xC1.toByte(), 0x05, 0xC1.toByte(), 0xBB.toByte()))
                 }, 300L)
-                handler.postDelayed({ queryBattery(gatt, slot) }, 750L)
+                handler.postDelayed({ queryBattery(gatt, sideByte) }, 750L)
 
                 if (pendingAutoHeatAfterConnect) {
-                    val targetT = pendingAutoTemp
+                    val targetT = pendingAutoTemp.coerceIn(30, 70)
                     handler.postDelayed({
                         if (gatt1 != null || gatt2 != null) {
                             isHeatingOn = true
                             currentTemp = targetT
-                            writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, 0x01, 0x01, 0xBB.toByte()))
+                            writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, sideByte, 0x01, 0xBB.toByte()))
                             handler.postDelayed({
-                                writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, 0x01, targetT.toByte(), 0xBB.toByte()))
+                                writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, sideByte, targetT.toByte(), 0xBB.toByte()))
                                 if (gatt1 != null && gatt2 != null) {
                                     pendingAutoHeatAfterConnect = false
                                 }
@@ -560,8 +566,7 @@ class InsoleKeepAliveService : Service() {
                 if (data.isEmpty()) return
                 if (data.size >= 15 && (data[1].toInt() and 0xFF) == 1 && (data[3].toInt() and 0xFF) == 3) {
                     val rawEle = data[13].toInt() and 0xFF
-                    val sideSlot = if ((data[4].toInt() and 0xFF) == 2) 2 else slot
-                    handleBatteryUpdate(sideSlot, rawEle)
+                    handleBatteryUpdate(slot, rawEle)
                     return
                 }
                 if ((data[0].toInt() and 0xFF) == 0xBC && data.size >= 6) {
@@ -668,27 +673,27 @@ class InsoleKeepAliveService : Service() {
         }
     }
 
-    private fun queryBattery(gatt: BluetoothGatt, slot: Int) {
-        val sideByte: Byte = if (slot == 2) 0x02 else 0x01
+    private fun queryBattery(gatt: BluetoothGatt, sideByte: Byte) {
         writeBytes(gatt, byteArrayOf(0xBC.toByte(), 0xCC.toByte(), 0x07, 0x03, sideByte, 0xCC.toByte(), 0xBB.toByte()))
     }
 
     fun sendPower(on: Boolean) {
         isHeatingOn = on
         val state: Byte = if (on) 0x01 else 0x00
-        gatt1?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, 0x01, state, 0xBB.toByte())) }
+        gatt1?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, sideByte1, state, 0xBB.toByte())) }
         handler.postDelayed({
-            gatt2?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, 0x01, state, 0xBB.toByte())) }
+            gatt2?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x01, 0x07, 0x03, sideByte2, state, 0xBB.toByte())) }
         }, 150L)
         notifyAllObservers()
     }
 
     fun sendTemperature(temp: Int) {
-        currentTemp = temp
-        val t = temp.toByte()
-        gatt1?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, 0x01, t, 0xBB.toByte())) }
+        val clamped = temp.coerceIn(30, 70)
+        currentTemp = clamped
+        val t = clamped.toByte()
+        gatt1?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, sideByte1, t, 0xBB.toByte())) }
         handler.postDelayed({
-            gatt2?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, 0x01, t, 0xBB.toByte())) }
+            gatt2?.let { writeBytes(it, byteArrayOf(0xBC.toByte(), 0x02, 0x07, 0x03, sideByte2, t, 0xBB.toByte())) }
         }, 150L)
         notifyAllObservers()
     }
