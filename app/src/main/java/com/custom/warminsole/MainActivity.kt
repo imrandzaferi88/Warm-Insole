@@ -235,9 +235,9 @@ class MainActivity : AppCompatActivity() {
             val m = InsoleKeepAliveService.boostRemainingSeconds / 60
             val s = InsoleKeepAliveService.boostRemainingSeconds % 60
             tvBoostStatus.visibility = View.VISIBLE
-            tvBoostStatus.text = String.format("BOOST 60 °C attivo — %02d:%02d al passaggio a 45 °C", m, s)
+            tvBoostStatus.text = String.format("BOOST 70 °C attivo — %02d:%02d al passaggio a 50 °C", m, s)
         } else {
-            btnBoost.text = "🔥 BOOST 10m (60° → 45°)"
+            btnBoost.text = "🔥 BOOST 10m (70° → 50°)"
             btnBoost.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#B71C1C"))
             tvBoostStatus.visibility = View.GONE
         }
@@ -279,7 +279,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
         })
         titleBox.addView(TextView(this).apply {
-            text = "Controllo Termico Pro"
+            text = "Controllo Termico Pro (Max 70°)"
             textSize = 13f
             setTextColor(Color.parseColor("#8E96A4"))
         })
@@ -452,7 +452,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         dialLayout.addView(TextView(this).apply {
-            text = "GHIERA TEMPERATURA (30° – 60°)"
+            text = "GHIERA TEMPERATURA (30° – 70°)"
             textSize = 12f
             letterSpacing = 0.08f
             typeface = Typeface.DEFAULT_BOLD
@@ -480,7 +480,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        val presets = listOf(40, 48, 57)
+        val presets = listOf(45, 58, 70)
         for (p in presets) {
             val btnPreset = styleCompactButton("$p °C", "#252A34", Color.WHITE, 15f, true).apply {
                 setOnClickListener {
@@ -495,7 +495,7 @@ class MainActivity : AppCompatActivity() {
         }
         dialLayout.addView(presetRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16 })
 
-        btnBoost = styleCompactButton("🔥 BOOST 10m (60° → 45°)", "#B71C1C", Color.WHITE, 14f, true).apply {
+        btnBoost = styleCompactButton("🔥 BOOST 10m (70° → 50°)", "#B71C1C", Color.WHITE, 14f, true).apply {
             setOnClickListener {
                 it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 if (InsoleKeepAliveService.isBoostActive) {
@@ -634,9 +634,9 @@ class MainActivity : AppCompatActivity() {
             .setTitle("About Us — WarmInsole")
             .setMessage(
                 "Imran Dzaferi ha creato questa bellissima app per offrire un controllo Bluetooth rapido, preciso e affidabile delle solette riscaldate.\n\n" +
-                "Dotata di Widget 4x2 trasparente stile vetro, Auto-Connect all'apertura, stima dinamica dell'autonomia residua, Eco-Step automatico, modalità Boost 60°→45° e ghiera termica aptica.\n\n" +
+                "Dotata di Widget 4x2 trasparente stile vetro, Auto-Connect all'apertura, stima dinamica dell'autonomia residua, Eco-Step automatico, modalità Boost 70°→50° e ghiera termica aptica.\n\n" +
                 "Sviluppatore: Imran Dzaferi\n" +
-                "Versione: 3.3 Pro"
+                "Versione: 3.4 Pro (70°C Unlocked)"
             )
             .setPositiveButton("Chiudi", null)
             .show()
@@ -644,8 +644,8 @@ class MainActivity : AppCompatActivity() {
 
     class RotaryThermostatView(context: Context) : View(context) {
         private val minTemp = 30
-        private val maxTemp = 60
-        private var temp = 40
+        private val maxTemp = 70
+        private var temp = 45
 
         var onTick: ((Int) -> Unit)? = null
         var onRelease: ((Int) -> Unit)? = null
@@ -702,9 +702,10 @@ class MainActivity : AppCompatActivity() {
 
         private fun getAccentColor(): Int {
             return when {
-                temp < 40 -> Color.parseColor("#29B6F6")
-                temp < 50 -> Color.parseColor("#FF9100")
-                else -> Color.parseColor("#FF3D00")
+                temp < 42 -> Color.parseColor("#29B6F6")
+                temp < 55 -> Color.parseColor("#FF9100")
+                temp <= 62 -> Color.parseColor("#FF3D00")
+                else -> Color.parseColor("#FF1744")
             }
         }
 
